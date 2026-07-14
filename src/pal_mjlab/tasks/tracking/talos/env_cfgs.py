@@ -17,6 +17,12 @@ def pal_talos_flat_tracking_env_cfg(
   """Create PAL Robotics Talos flat terrain tracking configuration."""
   cfg = make_tracking_env_cfg()
 
+  # TALOS uses full-body self-collision sensing. Use the model-derived contact
+  # allocation and retain more contact-sensor matches in batched simulation.
+  cfg.sim.nconmax = None
+  cfg.sim.contact_sensor_maxmatch = 500
+  cfg.sim.mujoco.ccd_iterations = 500
+
   cfg.scene.entities = {"robot": get_talos_robot_cfg()}
 
   self_collision_cfg = ContactSensorCfg(

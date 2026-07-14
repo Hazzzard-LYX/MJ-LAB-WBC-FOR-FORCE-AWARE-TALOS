@@ -22,6 +22,14 @@ def pal_talos_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """Create PAL Robotics Talos rough terrain velocity tracking configuration."""
   cfg = make_velocity_env_cfg()
 
+  # TALOS can generate substantially more contacts than the generic velocity
+  # environment, especially with full-body self-collision enabled. Let
+  # MuJoCo-Warp size its contact buffer from the compiled model and retain more
+  # contact-sensor matches for reliable batched simulation.
+  cfg.sim.nconmax = None
+  cfg.sim.contact_sensor_maxmatch = 500
+  cfg.sim.mujoco.ccd_iterations = 500
+
   cfg.scene.entities = {"robot": get_talos_robot_cfg()}
 
   site_names = ("left_foot", "right_foot")
