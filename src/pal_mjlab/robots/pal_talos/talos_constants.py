@@ -15,9 +15,45 @@ from pal_mjlab import PAL_MJLAB_SRC_PATH
 TALOS_XML: Path = PAL_MJLAB_SRC_PATH / "robots" / "pal_talos" / "xmls" / "talos.xml"
 assert TALOS_XML.exists()
 
+TALOS_PAYLOAD_BODY_NAME = "front_payload"
+TALOS_PAYLOAD_GEOM_NAME = "front_payload_collision"
+TALOS_PAYLOAD_PARENT_BODY_NAME = "torso_2_link"
+TALOS_PAYLOAD_MASS = 10.0
+TALOS_PAYLOAD_HALF_SIZE = (0.12, 0.12, 0.12)
+TALOS_PAYLOAD_POS = (0.35, 0.0, 0.14)
+
 
 def get_spec() -> mujoco.MjSpec:
   spec = mujoco.MjSpec.from_file(str(TALOS_XML))
+  return spec
+
+
+def get_payload_spec() -> mujoco.MjSpec:
+  """Return TALOS with a rigid cube payload fixed in front of its torso.
+
+  MuJoCo represents a fixed connection by making a body a child of another body
+  without adding a joint.  The payload therefore contributes mass and inertia to
+  the articulated system but introduces no additional degree of freedom.
+  """
+  spec = get_spec()
+  torso = spec.body(TALOS_PAYLOAD_PARENT_BODY_NAME)
+  if torso is None:
+    raise ValueError(
+      f"TALOS body '{TALOS_PAYLOAD_PARENT_BODY_NAME}' was not found in the model."
+    )
+
+  payload = torso.add_body(
+    name=TALOS_PAYLOAD_BODY_NAME,
+    pos=TALOS_PAYLOAD_POS,
+  )
+  payload.add_geom(
+    name=TALOS_PAYLOAD_GEOM_NAME,
+    type=mujoco.mjtGeom.mjGEOM_BOX,
+    size=TALOS_PAYLOAD_HALF_SIZE,
+    mass=TALOS_PAYLOAD_MASS,
+    rgba=(0.85, 0.15, 0.05, 1.0),
+    friction=(0.8, 0.02, 0.001),
+  )
   return spec
 
 
@@ -316,6 +352,16 @@ def get_talos_robot_cfg() -> EntityCfg:
     init_state=INIT_STATE,
     collisions=(FULL_COLLISION,),
     spec_fn=get_spec,
+    articulation=TALOS_ARTICULATION,
+  )
+
+
+def get_talos_payload_robot_cfg() -> EntityCfg:
+  """Get a fresh TALOS configuration with the rigid front payload."""
+  return EntityCfg(
+    init_state=INIT_STATE,
+    collisions=(FULL_COLLISION,),
+    spec_fn=get_payload_spec,
     articulation=TALOS_ARTICULATION,
   )
 

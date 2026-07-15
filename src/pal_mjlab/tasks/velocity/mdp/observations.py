@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
+from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import BuiltinSensor
 from mjlab.utils.lab_api.math import quat_apply_inverse
@@ -40,3 +41,31 @@ def imu_projected_gravity(
   # print(f"proj{asset.data.projected_gravity_b}")
   # Project to IMU frame (same as your C++ code)
   return quat_apply_inverse(imu_quat, gravity_w)
+
+
+def payload_com_pos_b(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Payload COM position relative to the robot root, in the root frame."""
+  asset: Entity = env.scene[asset_cfg.name]
+  if not isinstance(asset_cfg.body_ids, list) or len(asset_cfg.body_ids) != 1:
+    raise ValueError("payload_com_pos_b requires exactly one selected payload body.")
+
+  payload_pos_w = asset.data.body_com_pos_w[:, asset_cfg.body_ids[0]]
+  relative_pos_w = payload_pos_w - asset.data.root_link_pos_w
+  return quat_apply_inverse(asset.data.root_link_quat_w, relative_pos_w)
+
+
+def payload_mass(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Return the current payload mass in kilograms as a one-dimensional term."""
+  asset: Entity = env.scene[asset_cfg.name]
+  if not isinstance(asset_cfg.body_ids, list) or len(asset_cfg.body_ids) != 1:
+    raise ValueError("payload_mass requires exactly one selected payload body.")
+
+  global_body_id = asset.indexing.body_ids[asset_cfg.body_ids[0]]
+  masses = env.sim.model.body_mass[:, global_body_id]
+  return masses.reshape(env.num_envs, 1)

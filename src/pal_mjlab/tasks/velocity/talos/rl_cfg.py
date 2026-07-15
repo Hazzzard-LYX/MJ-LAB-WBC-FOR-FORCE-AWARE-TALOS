@@ -44,3 +44,10 @@ def pal_talos_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     num_steps_per_env=24,
     max_iterations=30_000,
   )
+
+
+def pal_talos_payload_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create a separate runner configuration for payload-conditioned policies."""
+  cfg = pal_talos_ppo_runner_cfg()
+  cfg.experiment_name = "talos_payload_velocity"
+  return cfg

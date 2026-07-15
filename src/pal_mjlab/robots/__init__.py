@@ -19,6 +19,12 @@ from pal_mjlab.robots.pal_kangaroo.kangaroo_constants import (  # noqa: F401
 )
 from pal_mjlab.robots.pal_talos.talos_constants import (  # noqa: F401
   TALOS_ACTION_SCALE,
+  TALOS_PAYLOAD_BODY_NAME,
+  TALOS_PAYLOAD_HALF_SIZE,
+  TALOS_PAYLOAD_MASS,
+  TALOS_PAYLOAD_PARENT_BODY_NAME,
+  TALOS_PAYLOAD_POS,
+  get_talos_payload_robot_cfg,
   get_talos_robot_cfg,
 )
 from pal_mjlab.robots.pal_tiago_pro.tiago_pro_constants import (  # noqa: F401

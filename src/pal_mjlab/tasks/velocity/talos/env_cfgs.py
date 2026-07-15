@@ -2,7 +2,9 @@
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
+from mjlab.managers.observation_manager import ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.sensor import (
   ContactMatch,
@@ -15,7 +17,13 @@ from mjlab.tasks.velocity import mdp
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.tasks.velocity.velocity_env_cfg import make_velocity_env_cfg
 
-from pal_mjlab.robots import TALOS_ACTION_SCALE, get_talos_robot_cfg
+from pal_mjlab.robots import (
+  TALOS_ACTION_SCALE,
+  TALOS_PAYLOAD_BODY_NAME,
+  get_talos_payload_robot_cfg,
+  get_talos_robot_cfg,
+)
+from pal_mjlab.tasks.velocity import mdp as pal_mdp
 
 
 def pal_talos_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
@@ -223,5 +231,31 @@ def pal_talos_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     assert isinstance(twist_cmd, UniformVelocityCommandCfg)
     twist_cmd.ranges.lin_vel_x = (-1.5, 2.0)
     twist_cmd.ranges.ang_vel_z = (-0.7, 0.7)
+
+  return cfg
+
+
+def pal_talos_payload_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Create flat velocity tracking with a rigid payload fixed to TALOS's torso."""
+  cfg = pal_talos_flat_env_cfg(play=play)
+  cfg.scene.entities = {"robot": get_talos_payload_robot_cfg()}
+
+  payload_cfg = SceneEntityCfg(
+    "robot",
+    body_names=(TALOS_PAYLOAD_BODY_NAME,),
+  )
+  payload_terms = {
+    "payload_com_pos_b": ObservationTermCfg(
+      func=pal_mdp.payload_com_pos_b,
+      params={"asset_cfg": payload_cfg},
+    ),
+    "payload_mass": ObservationTermCfg(
+      func=pal_mdp.payload_mass,
+      params={"asset_cfg": payload_cfg},
+      clip=(0.0, 50.0),
+    ),
+  }
+  for group_name in ("actor", "critic"):
+    cfg.observations[group_name].terms.update(payload_terms)
 
   return cfg
