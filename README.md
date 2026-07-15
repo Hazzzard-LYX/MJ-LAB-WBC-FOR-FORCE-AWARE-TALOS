@@ -1,5 +1,5 @@
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![mjlab](https://img.shields.io/badge/mjlab-1.1.1-76B900.svg)](https://mujocolab.github.io/mjlab/v1.1.1/index.html)
+[![mjlab](https://img.shields.io/badge/mjlab-1.5.0-76B900.svg)](https://mujocolab.github.io/mjlab/)
 
 # PAL Robotics in mjlab
 
@@ -25,8 +25,13 @@ Clone the repository.
 ```bash
 git clone https://github.com/pal-robotics/pal_mjlab.git 
 cd pal_mjlab
-uv sync
+uv sync --frozen --python 3.12
 ```
+
+For GPU training, run commands through `uv run` (or directly from `.venv/bin`).
+Do not reuse an unrelated Conda or pip environment: patch-level differences in
+PyTorch or MuJoCo-Warp can break batched, multi-environment simulation even when
+single-environment playback works.
 
 ## Quick Start
 
