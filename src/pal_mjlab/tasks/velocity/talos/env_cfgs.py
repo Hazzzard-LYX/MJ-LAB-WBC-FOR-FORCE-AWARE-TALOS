@@ -1,7 +1,11 @@
 """PAL Robotics Talos velocity tracking environment configurations."""
 
+import math
+
 from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.envs.mdp import dr
 from mjlab.envs.mdp.actions import JointPositionActionCfg
+from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.observation_manager import ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
@@ -24,6 +28,20 @@ from pal_mjlab.robots import (
   get_talos_robot_cfg,
 )
 from pal_mjlab.tasks.velocity import mdp as pal_mdp
+
+TALOS_PAYLOAD_MASS_RANGE = (2.0, 25.0)
+TALOS_PAYLOAD_POS_RANGES = {
+  0: (0.20, 0.55),
+  1: (-0.20, 0.20),
+  2: (0.05, 0.30),
+}
+
+# dr.pseudo_inertia scales mass by exp(2 * alpha). Convert the desired
+# absolute mass bounds into alpha bounds relative to the nominal 10 kg cube.
+TALOS_PAYLOAD_ALPHA_RANGE = (
+  0.5 * math.log(TALOS_PAYLOAD_MASS_RANGE[0] / 10.0),
+  0.5 * math.log(TALOS_PAYLOAD_MASS_RANGE[1] / 10.0),
+)
 
 
 def pal_talos_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
@@ -257,5 +275,27 @@ def pal_talos_payload_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   }
   for group_name in ("actor", "critic"):
     cfg.observations[group_name].terms.update(payload_terms)
+
+  # Sample one physically consistent payload variant per parallel environment.
+  # Parameters stay fixed within an environment, avoiding costly inertial model
+  # recomputation at every episode reset while covering the distribution densely
+  # during large batched training.
+  cfg.events["payload_inertia"] = EventTermCfg(
+    mode="startup",
+    func=dr.pseudo_inertia,
+    params={
+      "asset_cfg": payload_cfg,
+      "alpha_range": TALOS_PAYLOAD_ALPHA_RANGE,
+    },
+  )
+  cfg.events["payload_position"] = EventTermCfg(
+    mode="startup",
+    func=dr.body_pos,
+    params={
+      "asset_cfg": payload_cfg,
+      "operation": "abs",
+      "ranges": TALOS_PAYLOAD_POS_RANGES,
+    },
+  )
 
   return cfg
