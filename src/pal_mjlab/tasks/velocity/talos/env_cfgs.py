@@ -24,6 +24,9 @@ from mjlab.tasks.velocity.velocity_env_cfg import make_velocity_env_cfg
 from pal_mjlab.robots import (
   TALOS_ACTION_SCALE,
   TALOS_PAYLOAD_BODY_NAME,
+  TALOS_TRAY_BODY_NAME,
+  TALOS_TRAY_PAYLOAD_BODY_NAME,
+  get_talos_free_tray_payload_cfg,
   get_talos_payload_robot_cfg,
   get_talos_robot_cfg,
   get_talos_tray_robot_cfg,
@@ -306,4 +309,87 @@ def pal_talos_tray_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """Create flat velocity tracking with an empty tray fixed to both wrists."""
   cfg = pal_talos_flat_env_cfg(play=play)
   cfg.scene.entities = {"robot": get_talos_tray_robot_cfg()}
+  return cfg
+
+
+def pal_talos_free_payload_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create tray transport with a completely free cube placed at its center."""
+  cfg = pal_talos_tray_flat_env_cfg(play=play)
+  cfg.scene.entities["payload"] = get_talos_free_tray_payload_cfg()
+
+  tray_cfg = SceneEntityCfg("robot", body_names=(TALOS_TRAY_BODY_NAME,))
+  payload_cfg = SceneEntityCfg(
+    "payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,)
+  )
+
+  # Keep the robot at its calibrated carrying pose so the independently reset
+  # payload starts exactly over the tray in every parallel environment.
+  cfg.events["reset_base"].params["pose_range"] = {}
+  cfg.events["reset_base"].params["velocity_range"] = {}
+  cfg.events["reset_payload_on_tray"] = EventTermCfg(
+    mode="reset",
+    func=mdp.reset_root_state_uniform,
+    params={
+      "asset_cfg": payload_cfg,
+      "pose_range": {},
+      "velocity_range": {},
+    },
+  )
+
+  payload_terms = {
+    "payload_pos_t": ObservationTermCfg(
+      func=pal_mdp.payload_pos_t,
+      params={"tray_cfg": tray_cfg, "payload_cfg": payload_cfg},
+    ),
+    "payload_relative_velocity_t": ObservationTermCfg(
+      func=pal_mdp.payload_relative_velocity_t,
+      params={"tray_cfg": tray_cfg, "payload_cfg": payload_cfg},
+      clip=(-20.0, 20.0),
+    ),
+    "payload_mass": ObservationTermCfg(
+      func=pal_mdp.payload_mass,
+      params={"asset_cfg": payload_cfg},
+      clip=(0.0, 50.0),
+    ),
+  }
+  for group_name in ("actor", "critic"):
+    cfg.observations[group_name].terms.update(payload_terms)
+
+  cfg.rewards["tray_level"] = RewardTermCfg(
+    func=pal_mdp.tray_level_reward,
+    weight=2.0,
+    params={"std": 0.25, "tray_cfg": tray_cfg},
+  )
+  cfg.rewards["payload_position_on_tray"] = RewardTermCfg(
+    func=pal_mdp.payload_position_on_tray_reward,
+    weight=3.0,
+    params={
+      "std": 0.12,
+      "desired_pos_t": (0.0, 0.0, 0.1325),
+      "tray_cfg": tray_cfg,
+      "payload_cfg": payload_cfg,
+    },
+  )
+  cfg.rewards["payload_relative_motion"] = RewardTermCfg(
+    func=pal_mdp.payload_relative_motion_reward,
+    weight=2.0,
+    params={
+      "lin_vel_std": 0.5,
+      "ang_vel_std": 1.0,
+      "tray_cfg": tray_cfg,
+      "payload_cfg": payload_cfg,
+    },
+  )
+  cfg.terminations["payload_dropped"] = TerminationTermCfg(
+    func=pal_mdp.payload_dropped,
+    params={
+      "min_z_t": -0.05,
+      "max_abs_x_t": 0.38,
+      "max_abs_y_t": 0.49,
+      "tray_cfg": tray_cfg,
+      "payload_cfg": payload_cfg,
+    },
+  )
   return cfg

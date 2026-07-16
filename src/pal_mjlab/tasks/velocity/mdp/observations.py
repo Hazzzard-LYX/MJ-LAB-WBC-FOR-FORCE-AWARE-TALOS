@@ -63,9 +63,81 @@ def payload_mass(
 ) -> torch.Tensor:
   """Return the current payload mass in kilograms as a one-dimensional term."""
   asset: Entity = env.scene[asset_cfg.name]
-  if not isinstance(asset_cfg.body_ids, list) or len(asset_cfg.body_ids) != 1:
-    raise ValueError("payload_mass requires exactly one selected payload body.")
-
-  global_body_id = asset.indexing.body_ids[asset_cfg.body_ids[0]]
+  body_id = _single_body_id(asset, asset_cfg, "payload_mass")
+  global_body_id = asset.indexing.body_ids[body_id]
   masses = env.sim.model.body_mass[:, global_body_id]
   return masses.reshape(env.num_envs, 1)
+
+
+def payload_pos_t(
+  env: ManagerBasedRlEnv,
+  tray_cfg: SceneEntityCfg,
+  payload_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Payload COM position relative to the tray origin, in the tray frame."""
+  tray: Entity = env.scene[tray_cfg.name]
+  payload: Entity = env.scene[payload_cfg.name]
+  tray_body_id = _single_body_id(tray, tray_cfg, "payload_pos_t")
+  payload_body_id = _single_body_id(payload, payload_cfg, "payload_pos_t")
+
+  tray_pos_w = tray.data.body_link_pos_w[:, tray_body_id]
+  tray_quat_w = tray.data.body_link_quat_w[:, tray_body_id]
+  payload_pos_w = payload.data.body_com_pos_w[:, payload_body_id]
+  return quat_apply_inverse(tray_quat_w, payload_pos_w - tray_pos_w)
+
+
+def payload_relative_velocity_t(
+  env: ManagerBasedRlEnv,
+  tray_cfg: SceneEntityCfg,
+  payload_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Payload linear and angular velocity relative to the tray frame."""
+  tray: Entity = env.scene[tray_cfg.name]
+  payload: Entity = env.scene[payload_cfg.name]
+  tray_body_id = _single_body_id(
+    tray, tray_cfg, "payload_relative_velocity_t"
+  )
+  payload_body_id = _single_body_id(
+    payload, payload_cfg, "payload_relative_velocity_t"
+  )
+
+  tray_pos_w = tray.data.body_link_pos_w[:, tray_body_id]
+  tray_quat_w = tray.data.body_link_quat_w[:, tray_body_id]
+  tray_vel_w = tray.data.body_link_vel_w[:, tray_body_id]
+  payload_pos_w = payload.data.body_com_pos_w[:, payload_body_id]
+  payload_vel_w = payload.data.body_com_vel_w[:, payload_body_id]
+
+  offset_w = payload_pos_w - tray_pos_w
+  tray_point_lin_vel_w = tray_vel_w[:, :3] + torch.cross(
+    tray_vel_w[:, 3:], offset_w, dim=-1
+  )
+  relative_lin_vel_w = payload_vel_w[:, :3] - tray_point_lin_vel_w
+  relative_ang_vel_w = payload_vel_w[:, 3:] - tray_vel_w[:, 3:]
+  return torch.cat(
+    (
+      quat_apply_inverse(tray_quat_w, relative_lin_vel_w),
+      quat_apply_inverse(tray_quat_w, relative_ang_vel_w),
+    ),
+    dim=-1,
+  )
+
+
+def tray_projected_gravity(
+  env: ManagerBasedRlEnv,
+  tray_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Unit gravity vector expressed in the tray frame."""
+  tray: Entity = env.scene[tray_cfg.name]
+  tray_body_id = _single_body_id(tray, tray_cfg, "tray_projected_gravity")
+  tray_quat_w = tray.data.body_link_quat_w[:, tray_body_id]
+  return quat_apply_inverse(tray_quat_w, tray.data.gravity_vec_w)
+
+
+def _single_body_id(
+  asset: Entity, asset_cfg: SceneEntityCfg, function_name: str
+) -> int:
+  if isinstance(asset_cfg.body_ids, list) and len(asset_cfg.body_ids) == 1:
+    return asset_cfg.body_ids[0]
+  if isinstance(asset_cfg.body_ids, slice) and asset.num_bodies == 1:
+    return 0
+  raise ValueError(f"{function_name} requires exactly one selected body.")

@@ -58,3 +58,10 @@ def pal_talos_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   cfg = pal_talos_ppo_runner_cfg()
   cfg.experiment_name = "talos_tray_velocity"
   return cfg
+
+
+def pal_talos_free_payload_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create a separate runner configuration for free payload tray transport."""
+  cfg = pal_talos_ppo_runner_cfg()
+  cfg.experiment_name = "talos_free_payload_tray_velocity"
+  return cfg

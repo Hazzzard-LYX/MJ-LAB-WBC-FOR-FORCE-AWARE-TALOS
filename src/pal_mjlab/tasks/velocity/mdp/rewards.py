@@ -12,6 +12,12 @@ from mjlab.utils.lab_api.string import (
   resolve_matching_names_values,
 )
 
+from .observations import (
+  payload_pos_t,
+  payload_relative_velocity_t,
+  tray_projected_gravity,
+)
+
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
 
@@ -20,6 +26,64 @@ import numpy as np
 from scipy.spatial import ConvexHull
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
+
+
+def tray_level_reward(
+  env: ManagerBasedRlEnv,
+  std: float,
+  tray_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Reward a horizontal tray using its gravity projection."""
+  gravity_t = tray_projected_gravity(env, tray_cfg)
+  tilt_error_sq = torch.sum(torch.square(gravity_t[:, :2]), dim=-1)
+  return torch.exp(-tilt_error_sq / std**2)
+
+
+def payload_position_on_tray_reward(
+  env: ManagerBasedRlEnv,
+  std: float,
+  desired_pos_t: tuple[float, float, float],
+  tray_cfg: SceneEntityCfg,
+  payload_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Reward keeping the free payload centered on the tray surface."""
+  position_t = payload_pos_t(env, tray_cfg, payload_cfg)
+  desired = torch.tensor(desired_pos_t, device=env.device, dtype=position_t.dtype)
+  error_sq = torch.sum(torch.square(position_t - desired), dim=-1)
+  return torch.exp(-error_sq / std**2)
+
+
+def payload_relative_motion_reward(
+  env: ManagerBasedRlEnv,
+  lin_vel_std: float,
+  ang_vel_std: float,
+  tray_cfg: SceneEntityCfg,
+  payload_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Reward low payload motion relative to the moving tray."""
+  relative_velocity_t = payload_relative_velocity_t(env, tray_cfg, payload_cfg)
+  lin_error_sq = torch.sum(torch.square(relative_velocity_t[:, :3]), dim=-1)
+  ang_error_sq = torch.sum(torch.square(relative_velocity_t[:, 3:]), dim=-1)
+  return torch.exp(
+    -lin_error_sq / lin_vel_std**2 - ang_error_sq / ang_vel_std**2
+  )
+
+
+def payload_dropped(
+  env: ManagerBasedRlEnv,
+  min_z_t: float,
+  max_abs_x_t: float,
+  max_abs_y_t: float,
+  tray_cfg: SceneEntityCfg,
+  payload_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Terminate once the payload has clearly left the tray."""
+  position_t = payload_pos_t(env, tray_cfg, payload_cfg)
+  return (
+    (position_t[:, 2] < min_z_t)
+    | (torch.abs(position_t[:, 0]) > max_abs_x_t)
+    | (torch.abs(position_t[:, 1]) > max_abs_y_t)
+  )
 
 
 def torso_height(

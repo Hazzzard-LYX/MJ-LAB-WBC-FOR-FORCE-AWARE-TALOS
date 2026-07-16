@@ -30,6 +30,12 @@ TALOS_TRAY_RIGHT_WRIST_SITE_NAME = "right_wrist_tray_mount"
 TALOS_TRAY_WELD_NAME = "right_hand_tray_weld"
 TALOS_TRAY_MASS = 3.0
 TALOS_TRAY_HALF_SIZE = (0.275, 0.39, 0.0125)
+TALOS_TRAY_PAYLOAD_BODY_NAME = "tray_payload"
+TALOS_TRAY_PAYLOAD_JOINT_NAME = "tray_payload_freejoint"
+TALOS_TRAY_PAYLOAD_GEOM_NAME = "tray_payload_collision"
+TALOS_TRAY_PAYLOAD_MASS = 10.0
+TALOS_TRAY_PAYLOAD_HALF_SIZE = (0.12, 0.12, 0.12)
+TALOS_TRAY_PAYLOAD_INIT_POS = (0.43, 0.0, 1.2275)
 
 # The tray mounting transform is calibrated against INIT_STATE.  At that pose,
 # the tray is horizontal at world position (0.43, 0.0, 1.09), while the two
@@ -203,6 +209,22 @@ def get_tray_spec() -> mujoco.MjSpec:
       bodyname1=TALOS_TRAY_BODY_NAME,
       bodyname2=gripper_body_name,
     )
+  return spec
+
+
+def get_free_tray_payload_spec() -> mujoco.MjSpec:
+  """Return a standalone cube with a six-DoF freejoint for tray transport."""
+  spec = mujoco.MjSpec()
+  payload = spec.worldbody.add_body(name=TALOS_TRAY_PAYLOAD_BODY_NAME)
+  payload.add_freejoint(name=TALOS_TRAY_PAYLOAD_JOINT_NAME)
+  payload.add_geom(
+    name=TALOS_TRAY_PAYLOAD_GEOM_NAME,
+    type=mujoco.mjtGeom.mjGEOM_BOX,
+    size=TALOS_TRAY_PAYLOAD_HALF_SIZE,
+    mass=TALOS_TRAY_PAYLOAD_MASS,
+    rgba=(0.85, 0.15, 0.05, 1.0),
+    friction=(1.0, 0.02, 0.001),
+  )
   return spec
 
 
@@ -522,6 +544,17 @@ def get_talos_tray_robot_cfg() -> EntityCfg:
     collisions=(FULL_COLLISION,),
     spec_fn=get_tray_spec,
     articulation=TALOS_ARTICULATION,
+  )
+
+
+def get_talos_free_tray_payload_cfg() -> EntityCfg:
+  """Get a standalone free payload initialized at the tray center."""
+  return EntityCfg(
+    init_state=EntityCfg.InitialStateCfg(
+      pos=TALOS_TRAY_PAYLOAD_INIT_POS,
+      joint_pos={},
+    ),
+    spec_fn=get_free_tray_payload_spec,
   )
 
 
