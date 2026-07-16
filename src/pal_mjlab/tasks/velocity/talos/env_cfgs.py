@@ -26,6 +26,7 @@ from pal_mjlab.robots import (
   TALOS_PAYLOAD_BODY_NAME,
   get_talos_payload_robot_cfg,
   get_talos_robot_cfg,
+  get_talos_tray_robot_cfg,
 )
 from pal_mjlab.tasks.velocity import mdp as pal_mdp
 
@@ -298,4 +299,11 @@ def pal_talos_payload_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     },
   )
 
+  return cfg
+
+
+def pal_talos_tray_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Create flat velocity tracking with an empty tray fixed to both wrists."""
+  cfg = pal_talos_flat_env_cfg(play=play)
+  cfg.scene.entities = {"robot": get_talos_tray_robot_cfg()}
   return cfg

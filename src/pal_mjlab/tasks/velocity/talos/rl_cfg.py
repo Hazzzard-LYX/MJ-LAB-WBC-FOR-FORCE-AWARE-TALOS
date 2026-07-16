@@ -51,3 +51,10 @@ def pal_talos_payload_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   cfg = pal_talos_ppo_runner_cfg()
   cfg.experiment_name = "talos_payload_velocity"
   return cfg
+
+
+def pal_talos_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create a separate runner configuration for tray-carrying policies."""
+  cfg = pal_talos_ppo_runner_cfg()
+  cfg.experiment_name = "talos_tray_velocity"
+  return cfg

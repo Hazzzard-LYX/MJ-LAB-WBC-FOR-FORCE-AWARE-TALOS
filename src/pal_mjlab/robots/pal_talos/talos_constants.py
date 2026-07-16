@@ -22,6 +22,42 @@ TALOS_PAYLOAD_MASS = 10.0
 TALOS_PAYLOAD_HALF_SIZE = (0.12, 0.12, 0.12)
 TALOS_PAYLOAD_POS = (0.35, 0.0, 0.14)
 
+TALOS_TRAY_BODY_NAME = "hand_tray"
+TALOS_TRAY_PARENT_BODY_NAME = "arm_left_7_link"
+TALOS_TRAY_SECONDARY_BODY_NAME = "arm_right_7_link"
+TALOS_TRAY_RIGHT_MOUNT_SITE_NAME = "hand_tray_right_mount"
+TALOS_TRAY_RIGHT_WRIST_SITE_NAME = "right_wrist_tray_mount"
+TALOS_TRAY_WELD_NAME = "right_hand_tray_weld"
+TALOS_TRAY_MASS = 3.0
+TALOS_TRAY_HALF_SIZE = (0.275, 0.39, 0.0125)
+
+# The tray mounting transform is calibrated against INIT_STATE.  At that pose,
+# the tray is horizontal at world position (0.39, 0.0, 0.95), while the two
+# wrist origins are 0.723 m apart.  A site weld closes the kinematic chain at
+# the right wrist so that both arms carry the tray load.
+TALOS_TRAY_POS_LEFT_WRIST = (
+  0.1783271046093138,
+  -0.28475730862243437,
+  -0.24234442050774868,
+)
+TALOS_TRAY_QUAT_LEFT_WRIST = (
+  0.809667734759874,
+  -0.05229616376117401,
+  0.5489815516628436,
+  0.20080469735176915,
+)
+TALOS_TRAY_RIGHT_MOUNT_POS = (
+  -0.2007436635963284,
+  -0.36136976532635146,
+  0.027055007620989335,
+)
+TALOS_TRAY_RIGHT_WRIST_SITE_QUAT = (
+  0.809667734759874,
+  0.05229616376117401,
+  0.5489815516628436,
+  -0.20080469735176915,
+)
+
 
 def get_spec() -> mujoco.MjSpec:
   spec = mujoco.MjSpec.from_file(str(TALOS_XML))
@@ -53,6 +89,83 @@ def get_payload_spec() -> mujoco.MjSpec:
     mass=TALOS_PAYLOAD_MASS,
     rgba=(0.85, 0.15, 0.05, 1.0),
     friction=(0.8, 0.02, 0.001),
+  )
+  return spec
+
+
+def get_tray_spec() -> mujoco.MjSpec:
+  """Return TALOS rigidly carrying an empty tray with both wrists.
+
+  MuJoCo bodies can only have one structural parent.  The tray is therefore a
+  fixed child of the left wrist, while a site-based weld connects it to the
+  right wrist.  This creates a closed kinematic chain and distributes tray
+  forces through both arms without introducing another degree of freedom.
+  """
+  spec = get_spec()
+  left_wrist = spec.body(TALOS_TRAY_PARENT_BODY_NAME)
+  right_wrist = spec.body(TALOS_TRAY_SECONDARY_BODY_NAME)
+  if left_wrist is None or right_wrist is None:
+    raise ValueError("TALOS wrist bodies required for the hand tray were not found.")
+
+  tray = left_wrist.add_body(
+    name=TALOS_TRAY_BODY_NAME,
+    pos=TALOS_TRAY_POS_LEFT_WRIST,
+    quat=TALOS_TRAY_QUAT_LEFT_WRIST,
+  )
+  tray.add_geom(
+    name="hand_tray_base_collision",
+    type=mujoco.mjtGeom.mjGEOM_BOX,
+    size=TALOS_TRAY_HALF_SIZE,
+    mass=2.2,
+    rgba=(0.12, 0.32, 0.62, 1.0),
+    friction=(1.0, 0.02, 0.001),
+  )
+
+  rim_specs = (
+    ("front", (0.275, 0.0, 0.0375), (0.0125, 0.39, 0.0375)),
+    ("back", (-0.275, 0.0, 0.0375), (0.0125, 0.39, 0.0375)),
+    ("left", (0.0, 0.39, 0.0375), (0.275, 0.0125, 0.0375)),
+    ("right", (0.0, -0.39, 0.0375), (0.275, 0.0125, 0.0375)),
+  )
+  for side, pos, size in rim_specs:
+    tray.add_geom(
+      name=f"hand_tray_{side}_rim_collision",
+      type=mujoco.mjtGeom.mjGEOM_BOX,
+      pos=pos,
+      size=size,
+      mass=0.2,
+      rgba=(0.08, 0.22, 0.50, 1.0),
+      friction=(1.0, 0.02, 0.001),
+    )
+
+  tray.add_site(
+    name=TALOS_TRAY_RIGHT_MOUNT_SITE_NAME,
+    pos=TALOS_TRAY_RIGHT_MOUNT_POS,
+  )
+  right_wrist.add_site(
+    name=TALOS_TRAY_RIGHT_WRIST_SITE_NAME,
+    quat=TALOS_TRAY_RIGHT_WRIST_SITE_QUAT,
+  )
+  spec.add_equality(
+    name=TALOS_TRAY_WELD_NAME,
+    type=mujoco.mjtEq.mjEQ_WELD,
+    objtype=mujoco.mjtObj.mjOBJ_SITE,
+    name1=TALOS_TRAY_RIGHT_MOUNT_SITE_NAME,
+    name2=TALOS_TRAY_RIGHT_WRIST_SITE_NAME,
+    solref=(0.005, 1.0),
+  )
+
+  # The gripper visually intersects the tray at each mounting point.  Contact
+  # forces there would fight the rigid mounting constraint, so filter them.
+  spec.add_exclude(
+    name="tray_left_wrist_contact",
+    bodyname1=TALOS_TRAY_BODY_NAME,
+    bodyname2=TALOS_TRAY_PARENT_BODY_NAME,
+  )
+  spec.add_exclude(
+    name="tray_right_wrist_contact",
+    bodyname1=TALOS_TRAY_BODY_NAME,
+    bodyname2=TALOS_TRAY_SECONDARY_BODY_NAME,
   )
   return spec
 
@@ -362,6 +475,16 @@ def get_talos_payload_robot_cfg() -> EntityCfg:
     init_state=INIT_STATE,
     collisions=(FULL_COLLISION,),
     spec_fn=get_payload_spec,
+    articulation=TALOS_ARTICULATION,
+  )
+
+
+def get_talos_tray_robot_cfg() -> EntityCfg:
+  """Get a fresh TALOS configuration carrying the empty hand tray."""
+  return EntityCfg(
+    init_state=INIT_STATE,
+    collisions=(FULL_COLLISION,),
+    spec_fn=get_tray_spec,
     articulation=TALOS_ARTICULATION,
   )
 

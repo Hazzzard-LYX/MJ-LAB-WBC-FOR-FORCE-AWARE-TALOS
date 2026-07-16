@@ -24,8 +24,14 @@ from pal_mjlab.robots.pal_talos.talos_constants import (  # noqa: F401
   TALOS_PAYLOAD_MASS,
   TALOS_PAYLOAD_PARENT_BODY_NAME,
   TALOS_PAYLOAD_POS,
+  TALOS_TRAY_BODY_NAME,
+  TALOS_TRAY_HALF_SIZE,
+  TALOS_TRAY_MASS,
+  TALOS_TRAY_PARENT_BODY_NAME,
+  TALOS_TRAY_SECONDARY_BODY_NAME,
   get_talos_payload_robot_cfg,
   get_talos_robot_cfg,
+  get_talos_tray_robot_cfg,
 )
 from pal_mjlab.robots.pal_tiago_pro.tiago_pro_constants import (  # noqa: F401
   TIAGO_PRO_ACTION_SCALE,
