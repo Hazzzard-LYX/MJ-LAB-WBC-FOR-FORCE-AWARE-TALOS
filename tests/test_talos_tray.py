@@ -7,6 +7,7 @@ from pal_mjlab.robots.pal_talos.talos_constants import (
   INIT_STATE,
   TALOS_TRAY_BODY_NAME,
   TALOS_TRAY_HALF_SIZE,
+  TALOS_TRAY_HANDLE_SPECS,
   TALOS_TRAY_MASS,
   TALOS_TRAY_PARENT_BODY_NAME,
   TALOS_TRAY_RIGHT_MOUNT_SITE_NAME,
@@ -49,6 +50,13 @@ def test_tray_is_a_fixed_child_of_left_wrist() -> None:
   base_geom = model.geom("hand_tray_base_collision")
   assert base_geom.type == mujoco.mjtGeom.mjGEOM_BOX
   assert tuple(model.geom_size[base_geom.id]) == TALOS_TRAY_HALF_SIZE
+
+  for side, handle_spec in TALOS_TRAY_HANDLE_SPECS.items():
+    handle = model.geom(f"hand_tray_{side}_handle_collision")
+    support = model.geom(f"hand_tray_{side}_support_collision")
+    assert handle.type == mujoco.mjtGeom.mjGEOM_CYLINDER
+    assert support.type == mujoco.mjtGeom.mjGEOM_CAPSULE
+    np.testing.assert_allclose(handle.pos, handle_spec["pos"], atol=1e-12)
 
 
 def test_right_wrist_weld_is_aligned_at_initial_state() -> None:

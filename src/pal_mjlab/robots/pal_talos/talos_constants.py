@@ -32,13 +32,15 @@ TALOS_TRAY_MASS = 3.0
 TALOS_TRAY_HALF_SIZE = (0.275, 0.39, 0.0125)
 
 # The tray mounting transform is calibrated against INIT_STATE.  At that pose,
-# the tray is horizontal at world position (0.39, 0.0, 0.95), while the two
-# wrist origins are 0.723 m apart.  A site weld closes the kinematic chain at
-# the right wrist so that both arms carry the tray load.
+# the tray is horizontal at world position (0.43, 0.0, 1.09), while the two
+# wrist origins are 0.723 m apart.  Two angled handles pass through the gripper
+# grasp centers below the tray, with standoffs providing clearance to the hands.
+# A site weld closes the kinematic chain at the right grasp center so that both
+# arms carry the tray load.
 TALOS_TRAY_POS_LEFT_WRIST = (
-  0.1783271046093138,
-  -0.28475730862243437,
-  -0.24234442050774868,
+  0.31250841649220595,
+  -0.23132470677882747,
+  -0.22389631487034964,
 )
 TALOS_TRAY_QUAT_LEFT_WRIST = (
   0.809667734759874,
@@ -47,15 +49,71 @@ TALOS_TRAY_QUAT_LEFT_WRIST = (
   0.20080469735176915,
 )
 TALOS_TRAY_RIGHT_MOUNT_POS = (
-  -0.2007436635963284,
-  -0.36136976532635146,
-  0.027055007620989335,
+  -0.046019897496159,
+  -0.332312499153264,
+  -0.196777633603233,
 )
+TALOS_TRAY_GRASP_POS_WRIST = (0.0, 0.0, -0.213985)
 TALOS_TRAY_RIGHT_WRIST_SITE_QUAT = (
   0.809667734759874,
   0.05229616376117401,
   0.5489815516628436,
   -0.20080469735176915,
+)
+TALOS_TRAY_HANDLE_SPECS = {
+  "left": {
+    "pos": (-0.046019897496159, 0.332312499153264, -0.196777633603233),
+    "quat": (
+      0.809667734759874,
+      0.05229616376117401,
+      -0.5489815516628436,
+      -0.20080469735176915,
+    ),
+    "support_fromto": (
+      0.026779142150164,
+      0.321449208329395,
+      -0.228119120623312,
+      0.026779142150164,
+      0.321449208329395,
+      -0.0125,
+    ),
+  },
+  "right": {
+    "pos": (-0.046019897496159, -0.332312499153264, -0.196777633603233),
+    "quat": (
+      0.809667734759874,
+      -0.05229616376117401,
+      -0.5489815516628436,
+      0.20080469735176915,
+    ),
+    "support_fromto": (
+      0.026779142150164,
+      -0.321449208329395,
+      -0.228119120623312,
+      0.026779142150164,
+      -0.321449208329395,
+      -0.0125,
+    ),
+  },
+}
+
+TALOS_TRAY_GRIPPER_BODY_NAMES = (
+  TALOS_TRAY_PARENT_BODY_NAME,
+  "gripper_left_motor_double_link",
+  "gripper_left_inner_double_link",
+  "gripper_left_fingertip_1_link",
+  "gripper_left_fingertip_2_link",
+  "gripper_left_motor_single_link",
+  "gripper_left_inner_single_link",
+  "gripper_left_fingertip_3_link",
+  TALOS_TRAY_SECONDARY_BODY_NAME,
+  "gripper_right_motor_double_link",
+  "gripper_right_inner_double_link",
+  "gripper_right_fingertip_1_link",
+  "gripper_right_fingertip_2_link",
+  "gripper_right_motor_single_link",
+  "gripper_right_inner_single_link",
+  "gripper_right_fingertip_3_link",
 )
 
 
@@ -116,7 +174,7 @@ def get_tray_spec() -> mujoco.MjSpec:
     name="hand_tray_base_collision",
     type=mujoco.mjtGeom.mjGEOM_BOX,
     size=TALOS_TRAY_HALF_SIZE,
-    mass=2.2,
+    mass=1.8,
     rgba=(0.12, 0.32, 0.62, 1.0),
     friction=(1.0, 0.02, 0.001),
   )
@@ -133,9 +191,30 @@ def get_tray_spec() -> mujoco.MjSpec:
       type=mujoco.mjtGeom.mjGEOM_BOX,
       pos=pos,
       size=size,
-      mass=0.2,
+      mass=0.15,
       rgba=(0.08, 0.22, 0.50, 1.0),
       friction=(1.0, 0.02, 0.001),
+    )
+
+  for side, handle_spec in TALOS_TRAY_HANDLE_SPECS.items():
+    tray.add_geom(
+      name=f"hand_tray_{side}_handle_collision",
+      type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+      pos=handle_spec["pos"],
+      quat=handle_spec["quat"],
+      size=(0.025, 0.08),
+      mass=0.15,
+      rgba=(0.12, 0.12, 0.14, 1.0),
+      friction=(1.2, 0.02, 0.001),
+    )
+    tray.add_geom(
+      name=f"hand_tray_{side}_support_collision",
+      type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+      fromto=handle_spec["support_fromto"],
+      size=(0.015,),
+      mass=0.15,
+      rgba=(0.25, 0.25, 0.28, 1.0),
+      friction=(0.8, 0.02, 0.001),
     )
 
   tray.add_site(
@@ -144,6 +223,7 @@ def get_tray_spec() -> mujoco.MjSpec:
   )
   right_wrist.add_site(
     name=TALOS_TRAY_RIGHT_WRIST_SITE_NAME,
+    pos=TALOS_TRAY_GRASP_POS_WRIST,
     quat=TALOS_TRAY_RIGHT_WRIST_SITE_QUAT,
   )
   spec.add_equality(
@@ -155,18 +235,16 @@ def get_tray_spec() -> mujoco.MjSpec:
     solref=(0.005, 1.0),
   )
 
-  # The gripper visually intersects the tray at each mounting point.  Contact
-  # forces there would fight the rigid mounting constraint, so filter them.
-  spec.add_exclude(
-    name="tray_left_wrist_contact",
-    bodyname1=TALOS_TRAY_BODY_NAME,
-    bodyname2=TALOS_TRAY_PARENT_BODY_NAME,
-  )
-  spec.add_exclude(
-    name="tray_right_wrist_contact",
-    bodyname1=TALOS_TRAY_BODY_NAME,
-    bodyname2=TALOS_TRAY_SECONDARY_BODY_NAME,
-  )
+  # The current TALOS gripper joints are fixed in the source MJCF.  The handles
+  # are aligned visually with their grasp centers, while rigid mounting carries
+  # the forces.  Filter redundant hand-handle contacts so they do not fight the
+  # closed-chain constraint.
+  for gripper_body_name in TALOS_TRAY_GRIPPER_BODY_NAMES:
+    spec.add_exclude(
+      name=f"tray_{gripper_body_name}_contact",
+      bodyname1=TALOS_TRAY_BODY_NAME,
+      bodyname2=gripper_body_name,
+    )
   return spec
 
 
