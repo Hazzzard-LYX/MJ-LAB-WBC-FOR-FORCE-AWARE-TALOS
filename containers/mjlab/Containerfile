@@ -41,7 +41,7 @@ COPY containers/mjlab/smoke.py ./containers/mjlab/smoke.py
 RUN uv sync --frozen --extra cu128 \
     && uv cache clean \
     && python containers/mjlab/smoke.py --cpu-only \
-    && FORCE_CPU=1 python -m pytest -q
+    && MUJOCO_GL=disable FORCE_CPU=1 python -m pytest -q
 
 WORKDIR /workspace
 
