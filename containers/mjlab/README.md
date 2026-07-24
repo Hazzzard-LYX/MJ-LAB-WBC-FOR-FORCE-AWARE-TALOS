@@ -35,6 +35,10 @@ mkdir -p ~/IAS_Workspace/logs
 sbatch slurm/mjlab-build-image.sbatch
 ```
 
+The build job exports the finished image to a Git-addressed OCI archive under
+`~/IAS_Workspace/images/`. Podman storage is node-local on the IAS Cluster, so
+GPU jobs load this shared archive before starting a container.
+
 ## GPU validation
 
 Create the SLURM output directory before submitting:
