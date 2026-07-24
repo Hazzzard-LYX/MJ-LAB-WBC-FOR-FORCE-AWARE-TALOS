@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import subprocess
 import sys
 from importlib import metadata
 
@@ -42,9 +44,20 @@ def main() -> None:
   if mismatches:
     raise RuntimeError(f"Package version mismatch: {mismatches}")
 
+  git_executable = shutil.which("git")
+  if git_executable is None:
+    raise RuntimeError("git is not installed in the container.")
+  git_version = subprocess.run(
+    [git_executable, "--version"],
+    check=True,
+    capture_output=True,
+    text=True,
+  ).stdout.strip()
+
   wp.init()
   cuda_devices = [str(device) for device in wp.get_cuda_devices()]
   report = {
+    "git": git_version,
     "python": sys.version.split()[0],
     "packages": actual_versions,
     "torch_cuda": torch.version.cuda,
