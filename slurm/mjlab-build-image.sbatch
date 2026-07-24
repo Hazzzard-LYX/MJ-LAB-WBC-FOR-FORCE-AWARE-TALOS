@@ -10,6 +10,12 @@
 set -euo pipefail
 
 PROJECT_DIR="${HOME}/IAS_Workspace/projects/WBC-For-Talos"
+RUNTIME_BASE="${SLURM_TMPDIR:-/tmp}"
+
+export XDG_RUNTIME_DIR="${RUNTIME_BASE}/podman-${UID}-${SLURM_JOB_ID}"
+mkdir -p "${XDG_RUNTIME_DIR}"
+chmod 0700 "${XDG_RUNTIME_DIR}"
+unset DBUS_SESSION_BUS_ADDRESS
 
 cd "${PROJECT_DIR}"
 bash containers/mjlab/build-image.sh
