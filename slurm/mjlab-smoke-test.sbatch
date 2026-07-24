@@ -49,13 +49,14 @@ run_container() {
     --env WARP_CACHE_PATH=/cache/warp \
     --volume "${CACHE_ROOT}/warp:/cache/warp:rw" \
     --volume "${RUN_ROOT}:/workspace/logs:rw" \
+    --workdir /opt/pal_mjlab \
     "${IMAGE}" \
     "$@"
 }
 
 run_container python /opt/pal_mjlab/containers/mjlab/smoke.py
-run_container bash -lc \
-  "cd /opt/pal_mjlab && MUJOCO_GL=disable FORCE_CPU=1 python -m pytest -q"
+run_container env MUJOCO_GL=disable FORCE_CPU=1 \
+  /opt/pal_mjlab/.venv/bin/python -m pytest -q
 
 run_container python -m mjlab.scripts.train \
   Mjlab-Velocity-Flat-Pal-Talos-Free-Payload-Tray \
