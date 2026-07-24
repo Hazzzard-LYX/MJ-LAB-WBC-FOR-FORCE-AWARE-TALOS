@@ -27,6 +27,14 @@ Image preparation is allowed on the IAS login node, but training and simulation
 are not. The Containerfile performs only dependency installation, package
 validation, and CPU tests while building.
 
+On a busy login node, build through SLURM to give the dependency resolver a
+bounded 32 GiB memory allocation:
+
+```bash
+mkdir -p ~/IAS_Workspace/logs
+sbatch slurm/mjlab-build-image.sbatch
+```
+
 ## GPU validation
 
 Create the SLURM output directory before submitting:
