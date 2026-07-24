@@ -320,9 +320,7 @@ def pal_talos_free_payload_tray_flat_env_cfg(
   cfg.scene.entities["payload"] = get_talos_free_tray_payload_cfg()
 
   tray_cfg = SceneEntityCfg("robot", body_names=(TALOS_TRAY_BODY_NAME,))
-  payload_cfg = SceneEntityCfg(
-    "payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,)
-  )
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
 
   # Keep the robot at its calibrated carrying pose so the independently reset
   # payload starts exactly over the tray in every parallel environment.

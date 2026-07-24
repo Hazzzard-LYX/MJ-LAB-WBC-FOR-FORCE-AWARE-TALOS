@@ -64,9 +64,7 @@ def payload_relative_motion_reward(
   relative_velocity_t = payload_relative_velocity_t(env, tray_cfg, payload_cfg)
   lin_error_sq = torch.sum(torch.square(relative_velocity_t[:, :3]), dim=-1)
   ang_error_sq = torch.sum(torch.square(relative_velocity_t[:, 3:]), dim=-1)
-  return torch.exp(
-    -lin_error_sq / lin_vel_std**2 - ang_error_sq / ang_vel_std**2
-  )
+  return torch.exp(-lin_error_sq / lin_vel_std**2 - ang_error_sq / ang_vel_std**2)
 
 
 def payload_dropped(

@@ -94,12 +94,8 @@ def payload_relative_velocity_t(
   """Payload linear and angular velocity relative to the tray frame."""
   tray: Entity = env.scene[tray_cfg.name]
   payload: Entity = env.scene[payload_cfg.name]
-  tray_body_id = _single_body_id(
-    tray, tray_cfg, "payload_relative_velocity_t"
-  )
-  payload_body_id = _single_body_id(
-    payload, payload_cfg, "payload_relative_velocity_t"
-  )
+  tray_body_id = _single_body_id(tray, tray_cfg, "payload_relative_velocity_t")
+  payload_body_id = _single_body_id(payload, payload_cfg, "payload_relative_velocity_t")
 
   tray_pos_w = tray.data.body_link_pos_w[:, tray_body_id]
   tray_quat_w = tray.data.body_link_quat_w[:, tray_body_id]
