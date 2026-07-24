@@ -37,7 +37,11 @@ echo "Image: ${IMAGE}"
 echo "Image archive: ${IMAGE_ARCHIVE}"
 nvidia-smi
 test -f "${IMAGE_ARCHIVE}"
-podman load --input "${IMAGE_ARCHIVE}"
+if podman image exists "${IMAGE}"; then
+  echo "Using node-local cached image: ${IMAGE}"
+else
+  podman load --input "${IMAGE_ARCHIVE}"
+fi
 podman image inspect "${IMAGE}" >/dev/null
 
 run_container() {
