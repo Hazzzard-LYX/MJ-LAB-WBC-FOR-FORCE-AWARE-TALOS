@@ -12,7 +12,7 @@ LABEL org.opencontainers.image.revision="${VCS_REF}"
 COPY --from=uv /uv /uvx /bin/
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
     NVIDIA_VISIBLE_DEVICES=all \
     MUJOCO_GL=egl \
     PYTHONUNBUFFERED=1 \
