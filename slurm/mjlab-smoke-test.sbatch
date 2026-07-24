@@ -62,6 +62,7 @@ run_container env MUJOCO_GL=disable FORCE_CPU=1 \
 run_container python -m mjlab.scripts.train \
   Mjlab-Velocity-Flat-Pal-Talos-Free-Payload-Tray \
   --env.scene.num-envs 64 \
+  --agent.logger tensorboard \
   --agent.max-iterations 1 \
   --agent.save-interval 1 \
   --agent.run-name container-smoke-64env \
@@ -70,6 +71,7 @@ run_container python -m mjlab.scripts.train \
 run_container python -m mjlab.scripts.train \
   Mjlab-Velocity-Flat-Pal-Talos-Free-Payload-Tray \
   --env.scene.num-envs 1024 \
+  --agent.logger tensorboard \
   --agent.max-iterations 1 \
   --agent.save-interval 1 \
   --agent.run-name container-smoke-1024env \
