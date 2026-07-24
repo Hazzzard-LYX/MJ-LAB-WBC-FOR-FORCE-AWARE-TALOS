@@ -1,27 +1,64 @@
-# Python-generated files
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+id_ed25519
+id_ed25519.pub
+
+# Python-generated files and build output
 __pycache__/
-*.py[oc]
+*.py[cod]
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
 *.pch
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Virtual environments
-.venv
+.venv/
+venv/
 
-# Logs
-logs
-wandb
+# Simulator and dependency caches
+.cache/
+.nv/
+.nvidia-omniverse/
 MUJOCO_LOG.TXT
 
-# IDE
-.vscode
+# Runtime and experiment output
+logs/
+outputs/
+results/
+runs/
+wandb/
+checkpoints/
+datasets/
+artifacts/
 
-# Docs build output
+# Models and generated data
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.h5
+*.hdf5
+*.npz
+*.npy
+*.usd
+*.usda
+*.usdc
+motion.mp4
+
+# Documentation build output
 docs_build/
 
-# Data
-artifacts/
-*.npz
-motion.mp4
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
