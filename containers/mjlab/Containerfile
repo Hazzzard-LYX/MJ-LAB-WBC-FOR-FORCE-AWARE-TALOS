@@ -34,9 +34,7 @@ COPY pyproject.toml uv.lock README.md LICENSE ./
 RUN uv sync --frozen --extra cu128 --no-install-project \
     && uv cache clean
 
-COPY src ./src
-COPY tests ./tests
-COPY containers/mjlab/smoke.py ./containers/mjlab/smoke.py
+COPY . .
 
 RUN uv sync --frozen --extra cu128 \
     && uv cache clean \
