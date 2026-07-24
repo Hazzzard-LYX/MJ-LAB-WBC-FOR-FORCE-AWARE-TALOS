@@ -44,6 +44,7 @@ run_container() {
   podman run \
     --rm \
     --network=host \
+    --env MUJOCO_GL=disable \
     --env NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
     --env NVIDIA_VISIBLE_DEVICES=all \
     --env WARP_CACHE_PATH=/cache/warp \
