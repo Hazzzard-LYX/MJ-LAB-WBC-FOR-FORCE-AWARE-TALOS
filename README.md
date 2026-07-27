@@ -96,6 +96,9 @@ All simulation and training on the IAS Cluster must run on a SLURM compute
 node. The `mn` login node is only for lightweight repository, file, and job
 submission operations.
 
+The reproducible MJLab image and finite GPU validation workflow are documented
+in [`containers/mjlab/README.md`](containers/mjlab/README.md).
+
 ## Git workflow
 
 - `origin`: this project repository under `Hazzzard-LYX`
