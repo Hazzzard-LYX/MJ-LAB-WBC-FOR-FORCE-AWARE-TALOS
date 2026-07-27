@@ -8,7 +8,7 @@ import torch
 from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import BuiltinSensor
-from mjlab.utils.lab_api.math import quat_apply_inverse
+from mjlab.utils.lab_api.math import quat_apply, quat_apply_inverse
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
@@ -41,6 +41,68 @@ def imu_projected_gravity(
   # print(f"proj{asset.data.projected_gravity_b}")
   # Project to IMU frame (same as your C++ code)
   return quat_apply_inverse(imu_quat, gravity_w)
+
+
+def joint_torque_sensor(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Joint torque-sensor proxy for the selected instrumented TALOS joints.
+
+  MuJoCo's actuator contribution in generalized joint coordinates is the
+  closest model-side equivalent of TALOS's joint strain-gauge feedback.  The
+  selected joint set intentionally excludes the uninstrumented head and wrist
+  axes.
+  """
+  asset: Entity = env.scene[asset_cfg.name]
+  return asset.data.qfrc_actuator[:, asset_cfg.joint_ids]
+
+
+def force_torque_wrenches_w(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+  force_sensor_names: tuple[str, ...],
+  torque_sensor_names: tuple[str, ...],
+) -> tuple[torch.Tensor, torch.Tensor]:
+  """Return site F/T measurements rotated into the world frame.
+
+  Returns:
+    A pair ``(force_w, torque_w)`` with shape ``[B, S, 3]``.  Sensor and
+    ``asset_cfg.site_names`` ordering must match.
+  """
+  if len(force_sensor_names) != len(torque_sensor_names):
+    raise ValueError("Force and torque sensor lists must have equal length.")
+
+  site_ids = asset_cfg.site_ids
+  if not isinstance(site_ids, list) or len(site_ids) != len(force_sensor_names):
+    raise ValueError(
+      "force_torque_wrenches_w requires one selected site per F/T sensor pair."
+    )
+
+  asset: Entity = env.scene[asset_cfg.name]
+  force_s = torch.stack(
+    tuple(_builtin_sensor_data(env, name) for name in force_sensor_names), dim=1
+  )
+  torque_s = torch.stack(
+    tuple(_builtin_sensor_data(env, name) for name in torque_sensor_names), dim=1
+  )
+  site_quat_w = asset.data.site_quat_w[:, site_ids]
+  flat_quat = site_quat_w.reshape(-1, 4)
+  force_w = quat_apply(flat_quat, force_s.reshape(-1, 3)).reshape_as(force_s)
+  torque_w = quat_apply(flat_quat, torque_s.reshape(-1, 3)).reshape_as(torque_s)
+  return force_w, torque_w
+
+
+def _builtin_sensor_data(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+) -> torch.Tensor:
+  sensor = env.scene[sensor_name]
+  if not isinstance(sensor, BuiltinSensor):
+    raise TypeError(
+      f"Expected BuiltinSensor '{sensor_name}', got {type(sensor).__name__}."
+    )
+  return sensor.data
 
 
 def payload_com_pos_b(

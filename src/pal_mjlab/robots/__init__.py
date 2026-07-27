@@ -19,11 +19,15 @@ from pal_mjlab.robots.pal_kangaroo.kangaroo_constants import (  # noqa: F401
 )
 from pal_mjlab.robots.pal_talos.talos_constants import (  # noqa: F401
   TALOS_ACTION_SCALE,
+  TALOS_ANKLE_FT_SITE_NAMES,
+  TALOS_FT_SITE_BODIES,
+  TALOS_FT_SITE_NAMES,
   TALOS_PAYLOAD_BODY_NAME,
   TALOS_PAYLOAD_HALF_SIZE,
   TALOS_PAYLOAD_MASS,
   TALOS_PAYLOAD_PARENT_BODY_NAME,
   TALOS_PAYLOAD_POS,
+  TALOS_TORQUE_SENSOR_JOINT_NAMES,
   TALOS_TRAY_BODY_NAME,
   TALOS_TRAY_HALF_SIZE,
   TALOS_TRAY_MASS,
@@ -33,6 +37,7 @@ from pal_mjlab.robots.pal_talos.talos_constants import (  # noqa: F401
   TALOS_TRAY_PAYLOAD_INIT_POS,
   TALOS_TRAY_PAYLOAD_MASS,
   TALOS_TRAY_SECONDARY_BODY_NAME,
+  TALOS_WRIST_FT_SITE_NAMES,
   get_talos_free_tray_payload_cfg,
   get_talos_payload_robot_cfg,
   get_talos_robot_cfg,

@@ -8,9 +8,17 @@ the PAL Robotics TALOS humanoid.
 
 The current MJLab implementation trains TALOS to track planar velocity while
 carrying a tray with a free payload. The tray is mounted to both wrists and the
-payload is governed by contact dynamics rather than a fixed joint. The next
-stage is to expose physically measurable force/torque signals to the policy and
-develop force-aware transport objectives.
+payload is governed by contact dynamics rather than a fixed joint. The policy
+uses a fixed, hardware-deployable sensor contract and force-aware transport
+objectives.
+
+The 153-dimensional actor input is identical across all TALOS tasks. It contains
+joint encoder position and velocity, IMU/state-estimator channels, the previous
+action and velocity command, 24 instrumented joint-torque measurements, and the
+four wrist/ankle six-axis F/T measurements available on the real robot.
+Unobservable payload position, velocity, and mass are restricted to the critic.
+Actor sensor channels include noise, saturation, and bounded latency during
+training.
 
 This repository is derived from
 [PAL Robotics' pal_mjlab](https://github.com/pal-robotics/pal_mjlab). The
@@ -79,9 +87,7 @@ Start a headless training run:
 
 ```bash
 uv run train Mjlab-Velocity-Flat-Pal-Talos-Free-Payload-Tray \
-  --env.scene.num-envs 1024 \
-  --device cuda:0 \
-  --headless
+  --env.scene.num-envs 1024
 ```
 
 ## IAS Cluster

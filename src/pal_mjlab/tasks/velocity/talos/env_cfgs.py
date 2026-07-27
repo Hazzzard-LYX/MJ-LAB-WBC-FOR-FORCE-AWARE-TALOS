@@ -1,6 +1,7 @@
 """PAL Robotics Talos velocity tracking environment configurations."""
 
 import math
+from dataclasses import replace
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp import dr
@@ -11,6 +12,7 @@ from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.sensor import (
+  BuiltinSensorCfg,
   ContactMatch,
   ContactSensorCfg,
   ObjRef,
@@ -20,12 +22,16 @@ from mjlab.sensor import (
 from mjlab.tasks.velocity import mdp
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.tasks.velocity.velocity_env_cfg import make_velocity_env_cfg
+from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
 from pal_mjlab.robots import (
   TALOS_ACTION_SCALE,
+  TALOS_FT_SITE_NAMES,
   TALOS_PAYLOAD_BODY_NAME,
+  TALOS_TORQUE_SENSOR_JOINT_NAMES,
   TALOS_TRAY_BODY_NAME,
   TALOS_TRAY_PAYLOAD_BODY_NAME,
+  TALOS_WRIST_FT_SITE_NAMES,
   get_talos_free_tray_payload_cfg,
   get_talos_payload_robot_cfg,
   get_talos_robot_cfg,
@@ -46,6 +52,131 @@ TALOS_PAYLOAD_ALPHA_RANGE = (
   0.5 * math.log(TALOS_PAYLOAD_MASS_RANGE[0] / 10.0),
   0.5 * math.log(TALOS_PAYLOAD_MASS_RANGE[1] / 10.0),
 )
+
+TALOS_FORCE_SENSOR_NAMES = tuple(
+  f"robot/{site_name}_force" for site_name in TALOS_FT_SITE_NAMES
+)
+TALOS_TORQUE_SENSOR_NAMES = tuple(
+  f"robot/{site_name}_torque" for site_name in TALOS_FT_SITE_NAMES
+)
+TALOS_WRIST_FORCE_SENSOR_NAMES = TALOS_FORCE_SENSOR_NAMES[:2]
+TALOS_WRIST_TORQUE_SENSOR_NAMES = TALOS_TORQUE_SENSOR_NAMES[:2]
+
+
+def _talos_force_torque_sensor_cfgs() -> tuple[BuiltinSensorCfg, ...]:
+  sensors: list[BuiltinSensorCfg] = []
+  for site_name in TALOS_FT_SITE_NAMES:
+    site_ref = ObjRef(type="site", name=site_name, entity="robot")
+    sensors.extend(
+      (
+        BuiltinSensorCfg(
+          name=f"{site_name}_force",
+          sensor_type="force",
+          obj=site_ref,
+        ),
+        BuiltinSensorCfg(
+          name=f"{site_name}_torque",
+          sensor_type="torque",
+          obj=site_ref,
+        ),
+      )
+    )
+  return tuple(sensors)
+
+
+def _add_talos_hardware_observations(cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
+  """Install the fixed, real-hardware-compatible TALOS actor contract."""
+  actor_terms = cfg.observations["actor"].terms
+  critic_terms = cfg.observations["critic"].terms
+  max_sensor_lag = 0 if play else 1
+
+  # Existing encoder and IMU/state-estimator channels gain bounded latency and
+  # saturation in the actor only.  The critic remains instantaneous and clean.
+  sensor_limits = {
+    "base_lin_vel": (-10.0, 10.0),
+    "base_ang_vel": (-20.0, 20.0),
+    "projected_gravity": (-1.0, 1.0),
+    "joint_pos": (-4.0, 4.0),
+    "joint_vel": (-50.0, 50.0),
+  }
+  for term_name, clip in sensor_limits.items():
+    actor_terms[term_name] = replace(
+      actor_terms[term_name],
+      clip=clip,
+      delay_min_lag=0,
+      delay_max_lag=max_sensor_lag,
+      delay_hold_prob=0.8,
+      delay_update_period=5,
+    )
+
+  actor_terms["imu_lin_acc"] = ObservationTermCfg(
+    func=mdp.builtin_sensor,
+    params={"sensor_name": "robot/imu_lin_acc"},
+    noise=Unoise(n_min=-0.2, n_max=0.2),
+    clip=(-100.0, 100.0),
+    scale=0.1,
+    delay_min_lag=0,
+    delay_max_lag=max_sensor_lag,
+    delay_hold_prob=0.8,
+    delay_update_period=5,
+  )
+  critic_terms["imu_lin_acc"] = ObservationTermCfg(
+    func=mdp.builtin_sensor,
+    params={"sensor_name": "robot/imu_lin_acc"},
+    scale=0.1,
+  )
+
+  instrumented_joints = SceneEntityCfg(
+    "robot",
+    joint_names=TALOS_TORQUE_SENSOR_JOINT_NAMES,
+    preserve_order=True,
+  )
+  actor_terms["joint_torque_sensors"] = ObservationTermCfg(
+    func=pal_mdp.joint_torque_sensor,
+    params={"asset_cfg": instrumented_joints},
+    noise=Unoise(n_min=-1.0, n_max=1.0),
+    clip=(-450.0, 450.0),
+    scale=0.01,
+    delay_min_lag=0,
+    delay_max_lag=max_sensor_lag,
+    delay_hold_prob=0.8,
+    delay_update_period=5,
+  )
+  critic_terms["joint_torque_sensors"] = ObservationTermCfg(
+    func=pal_mdp.joint_torque_sensor,
+    params={
+      "asset_cfg": SceneEntityCfg(
+        "robot",
+        joint_names=TALOS_TORQUE_SENSOR_JOINT_NAMES,
+        preserve_order=True,
+      )
+    },
+    scale=0.01,
+  )
+
+  for site_name in TALOS_FT_SITE_NAMES:
+    for sensor_type, noise, clip, scale in (
+      ("force", 2.0, (-2000.0, 2000.0), 0.01),
+      ("torque", 0.2, (-300.0, 300.0), 0.05),
+    ):
+      term_name = f"{site_name}_{sensor_type}"
+      sensor_name = f"robot/{term_name}"
+      actor_terms[term_name] = ObservationTermCfg(
+        func=mdp.builtin_sensor,
+        params={"sensor_name": sensor_name},
+        noise=Unoise(n_min=-noise, n_max=noise),
+        clip=clip,
+        scale=scale,
+        delay_min_lag=0,
+        delay_max_lag=max_sensor_lag,
+        delay_hold_prob=0.8,
+        delay_update_period=5,
+      )
+      critic_terms[term_name] = ObservationTermCfg(
+        func=mdp.builtin_sensor,
+        params={"sensor_name": sensor_name},
+        scale=scale,
+      )
 
 
 def pal_talos_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
@@ -118,7 +249,9 @@ def pal_talos_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     self_collision_cfg,
     body_ground_cfg,
     foot_height_scan,
+    *_talos_force_torque_sensor_cfgs(),
   )
+  _add_talos_hardware_observations(cfg, play=play)
 
   if cfg.scene.terrain is not None and cfg.scene.terrain.terrain_generator is not None:
     cfg.scene.terrain.terrain_generator.curriculum = True
@@ -277,8 +410,7 @@ def pal_talos_payload_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       clip=(0.0, 50.0),
     ),
   }
-  for group_name in ("actor", "critic"):
-    cfg.observations[group_name].terms.update(payload_terms)
+  cfg.observations["critic"].terms.update(payload_terms)
 
   # Sample one physically consistent payload variant per parallel environment.
   # Parameters stay fixed within an environment, avoiding costly inertial model
@@ -352,9 +484,13 @@ def pal_talos_free_payload_tray_flat_env_cfg(
       clip=(0.0, 50.0),
     ),
   }
-  for group_name in ("actor", "critic"):
-    cfg.observations[group_name].terms.update(payload_terms)
+  cfg.observations["critic"].terms.update(payload_terms)
 
+  wrist_sensor_site_cfg = SceneEntityCfg(
+    "robot",
+    site_names=TALOS_WRIST_FT_SITE_NAMES,
+    preserve_order=True,
+  )
   cfg.rewards["tray_level"] = RewardTermCfg(
     func=pal_mdp.tray_level_reward,
     weight=2.0,
@@ -378,6 +514,39 @@ def pal_talos_free_payload_tray_flat_env_cfg(
       "ang_vel_std": 1.0,
       "tray_cfg": tray_cfg,
       "payload_cfg": payload_cfg,
+    },
+  )
+  cfg.rewards["wrist_load_balance"] = RewardTermCfg(
+    func=pal_mdp.wrist_load_balance_reward,
+    weight=1.0,
+    params={
+      "std": 0.25,
+      "sensor_site_cfg": wrist_sensor_site_cfg,
+      "force_sensor_names": TALOS_WRIST_FORCE_SENSOR_NAMES,
+      "torque_sensor_names": TALOS_WRIST_TORQUE_SENSOR_NAMES,
+    },
+  )
+  cfg.rewards["tray_tipping_moment"] = RewardTermCfg(
+    func=pal_mdp.tray_tipping_moment_reward,
+    weight=1.0,
+    params={
+      "std": 20.0,
+      "tray_cfg": tray_cfg,
+      "sensor_site_cfg": SceneEntityCfg(
+        "robot",
+        site_names=TALOS_WRIST_FT_SITE_NAMES,
+        preserve_order=True,
+      ),
+      "force_sensor_names": TALOS_WRIST_FORCE_SENSOR_NAMES,
+      "torque_sensor_names": TALOS_WRIST_TORQUE_SENSOR_NAMES,
+    },
+  )
+  cfg.rewards["wrist_force_rate"] = RewardTermCfg(
+    func=pal_mdp.wrist_force_rate_penalty,
+    weight=-0.02,
+    params={
+      "force_sensor_names": TALOS_WRIST_FORCE_SENSOR_NAMES,
+      "max_force_rate": 5000.0,
     },
   )
   cfg.terminations["payload_dropped"] = TerminationTermCfg(

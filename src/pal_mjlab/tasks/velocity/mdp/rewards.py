@@ -8,11 +8,13 @@ from mjlab.entity import Entity
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor.contact_sensor import ContactSensor
+from mjlab.utils.lab_api.math import quat_apply_inverse
 from mjlab.utils.lab_api.string import (
   resolve_matching_names_values,
 )
 
 from .observations import (
+  force_torque_wrenches_w,
   payload_pos_t,
   payload_relative_velocity_t,
   tray_projected_gravity,
@@ -26,6 +28,125 @@ import numpy as np
 from scipy.spatial import ConvexHull
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
+
+
+def wrist_load_balance_reward(
+  env: ManagerBasedRlEnv,
+  std: float,
+  sensor_site_cfg: SceneEntityCfg,
+  force_sensor_names: tuple[str, str],
+  torque_sensor_names: tuple[str, str],
+) -> torch.Tensor:
+  """Reward equal gravity-axis load sharing between the two wrists."""
+  asset: Entity = env.scene[sensor_site_cfg.name]
+  force_w, _ = force_torque_wrenches_w(
+    env,
+    sensor_site_cfg,
+    force_sensor_names,
+    torque_sensor_names,
+  )
+  support_axis_w = -asset.data.gravity_vec_w
+  support_load = torch.abs(torch.sum(force_w * support_axis_w.unsqueeze(1), dim=-1))
+  imbalance = torch.abs(support_load[:, 0] - support_load[:, 1]) / (
+    support_load[:, 0] + support_load[:, 1] + 1.0
+  )
+  env.extras["log"]["Metrics/wrist_load_imbalance"] = torch.mean(imbalance)
+  return torch.exp(-torch.square(imbalance) / std**2)
+
+
+def tray_tipping_moment_reward(
+  env: ManagerBasedRlEnv,
+  std: float,
+  tray_cfg: SceneEntityCfg,
+  sensor_site_cfg: SceneEntityCfg,
+  force_sensor_names: tuple[str, str],
+  torque_sensor_names: tuple[str, str],
+) -> torch.Tensor:
+  """Reward a small net roll/pitch moment about the tray origin."""
+  asset: Entity = env.scene[sensor_site_cfg.name]
+  tray: Entity = env.scene[tray_cfg.name]
+  force_w, torque_w = force_torque_wrenches_w(
+    env,
+    sensor_site_cfg,
+    force_sensor_names,
+    torque_sensor_names,
+  )
+
+  tray_body_id = _single_body_id_for_reward(tray, tray_cfg)
+  tray_pos_w = tray.data.body_link_pos_w[:, tray_body_id]
+  tray_quat_w = tray.data.body_link_quat_w[:, tray_body_id]
+  site_ids = sensor_site_cfg.site_ids
+  assert isinstance(site_ids, list)
+  site_pos_w = asset.data.site_pos_w[:, site_ids]
+
+  sensor_count = force_w.shape[1]
+  tray_quat_expanded = tray_quat_w[:, None, :].expand(-1, sensor_count, -1)
+  flat_tray_quat = tray_quat_expanded.reshape(-1, 4)
+  force_t = quat_apply_inverse(flat_tray_quat, force_w.reshape(-1, 3)).reshape_as(
+    force_w
+  )
+  torque_t = quat_apply_inverse(flat_tray_quat, torque_w.reshape(-1, 3)).reshape_as(
+    torque_w
+  )
+  lever_t = quat_apply_inverse(
+    flat_tray_quat,
+    (site_pos_w - tray_pos_w[:, None, :]).reshape(-1, 3),
+  ).reshape_as(force_w)
+
+  net_moment_t = torch.sum(torque_t + torch.cross(lever_t, force_t, dim=-1), dim=1)
+  tipping_moment = torch.linalg.vector_norm(net_moment_t[:, :2], dim=-1)
+  env.extras["log"]["Metrics/tray_tipping_moment_nm"] = torch.mean(tipping_moment)
+  return torch.exp(-torch.square(tipping_moment) / std**2)
+
+
+class wrist_force_rate_penalty:
+  """Penalize wrist F/T force spikes while ignoring episode reset transients."""
+
+  def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
+    sensor_names = cfg.params["force_sensor_names"]
+    self._previous_force = torch.zeros(
+      (env.num_envs, len(sensor_names), 3),
+      device=env.device,
+      dtype=torch.float32,
+    )
+    self._initialized = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    if env_ids is None:
+      env_ids = slice(None)
+    self._previous_force[env_ids] = 0.0
+    self._initialized[env_ids] = False
+
+  def __call__(
+    self,
+    env: ManagerBasedRlEnv,
+    force_sensor_names: tuple[str, str],
+    max_force_rate: float,
+  ) -> torch.Tensor:
+    forces = torch.stack(
+      tuple(env.scene[name].data for name in force_sensor_names), dim=1
+    )
+    force_rate = (
+      torch.linalg.vector_norm(forces - self._previous_force, dim=-1) / env.step_dt
+    )
+    penalty = torch.sum(
+      torch.square(torch.relu(force_rate - max_force_rate) / max_force_rate), dim=1
+    )
+    penalty = torch.where(self._initialized, penalty, torch.zeros_like(penalty))
+    self._previous_force.copy_(forces)
+    self._initialized[:] = True
+    env.extras["log"]["Metrics/wrist_force_rate_nps"] = torch.mean(
+      torch.max(force_rate, dim=1).values
+    )
+    return penalty
+
+
+def _single_body_id_for_reward(asset: Entity, asset_cfg: SceneEntityCfg) -> int:
+  if isinstance(asset_cfg.body_ids, list) and len(asset_cfg.body_ids) == 1:
+    return asset_cfg.body_ids[0]
+  if isinstance(asset_cfg.body_ids, slice) and asset.num_bodies == 1:
+    return 0
+  raise ValueError("Reward requires exactly one selected body.")
 
 
 def tray_level_reward(
