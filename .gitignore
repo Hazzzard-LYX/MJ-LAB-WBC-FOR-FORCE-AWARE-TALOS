@@ -19,15 +19,25 @@ wheels/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
 
 # Virtual environments
 .venv/
+.venv-*/
 venv/
+venv-*/
+.direnv/
 
 # Simulator and dependency caches
 .cache/
 .nv/
 .nvidia-omniverse/
+.warp/
+warp_cache/
 MUJOCO_LOG.TXT
 
 # Runtime and experiment output
@@ -39,6 +49,8 @@ wandb/
 checkpoints/
 datasets/
 artifacts/
+videos/
+events.out.tfevents.*
 
 # Models and generated data
 *.pt
@@ -53,6 +65,24 @@ artifacts/
 *.usda
 *.usdc
 motion.mp4
+
+# Slurm and container runtime artifacts
+slurm-*.out
+mjlab-build-*.out
+mjlab-build-*.err
+mjlab-smoke-*.out
+mjlab-smoke-*.err
+*.oci
+*.sif
+/libpod/
+/podman-tmp/
+
+# Generic process and temporary files
+*.log
+*.pid
+*.tmp
+*.swp
+*~
 
 # Documentation build output
 docs_build/
