@@ -1,21 +1,46 @@
 # Credentials and local configuration
 .env
 .env.*
+!.env.example
 secrets/
 *.pem
 *.key
+id_ed25519
+id_ed25519.pub
 
-# Python
+# Python-generated files and build output
 __pycache__/
 *.py[cod]
-.venv/
-venv/
+build/
+dist/
+wheels/
+*.egg-info/
+*.pch
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
 
-# Isaac Sim, Isaac Lab, and experiment output
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+venv-*/
+.direnv/
+
+# Simulator and dependency caches
 .cache/
+.nv/
+.nvidia-omniverse/
+.warp/
+warp_cache/
+MUJOCO_LOG.TXT
+
+# Runtime and experiment output
 logs/
 outputs/
 results/
@@ -23,6 +48,9 @@ runs/
 wandb/
 checkpoints/
 datasets/
+artifacts/
+videos/
+events.out.tfevents.*
 
 # Models and generated data
 *.pt
@@ -36,8 +64,30 @@ datasets/
 *.usd
 *.usda
 *.usdc
+motion.mp4
 
-# Editor and OS files
+# Slurm and container runtime artifacts
+slurm-*.out
+mjlab-build-*.out
+mjlab-build-*.err
+mjlab-smoke-*.out
+mjlab-smoke-*.err
+*.oci
+*.sif
+/libpod/
+/podman-tmp/
+
+# Generic process and temporary files
+*.log
+*.pid
+*.tmp
+*.swp
+*~
+
+# Documentation build output
+docs_build/
+
+# Editors and operating systems
 .vscode/
 .idea/
 .DS_Store
