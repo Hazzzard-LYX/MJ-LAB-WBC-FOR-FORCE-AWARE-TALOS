@@ -30,12 +30,66 @@ from scipy.spatial import ConvexHull
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
 
+def command_tracking_gate(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  std: float,
+  min_factor: float,
+  entity_name: str = "robot",
+) -> torch.Tensor:
+  """Scale transport rewards by how well planar velocity is tracked.
+
+  The non-zero floor preserves a learning signal for payload stabilization while
+  preventing a stationary policy from collecting the full transport reward under
+  a moving command.
+  """
+  if std <= 0.0:
+    raise ValueError(f"Tracking gate std must be positive, got {std}.")
+  if not 0.0 <= min_factor <= 1.0:
+    raise ValueError(f"Tracking gate min_factor must be in [0, 1], got {min_factor}.")
+
+  asset: Entity = env.scene[entity_name]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  actual = asset.data.root_link_lin_vel_b
+  planar_error_sq = torch.sum(torch.square(command[:, :2] - actual[:, :2]), dim=1)
+  vertical_error_sq = torch.square(actual[:, 2])
+  tracking = torch.exp(-(planar_error_sq + vertical_error_sq) / std**2)
+  gate = min_factor + (1.0 - min_factor) * tracking
+  env.extras["log"]["Metrics/transport_tracking_gate"] = torch.mean(gate)
+  return gate
+
+
+def planar_velocity_tracking_error(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Return a non-saturating base-velocity tracking penalty.
+
+  This complements the bounded exponential tracking reward with a gradient that
+  remains useful after the policy has drifted far from the commanded velocity.
+  """
+  asset: Entity = env.scene[asset_cfg.name]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None, f"Command '{command_name}' not found."
+  actual = asset.data.root_link_lin_vel_b
+  planar_error = torch.linalg.vector_norm(command[:, :2] - actual[:, :2], dim=1)
+  vertical_error = torch.abs(actual[:, 2])
+  error = planar_error + vertical_error
+  env.extras["log"]["Metrics/planar_velocity_tracking_error"] = torch.mean(error)
+  return error
+
+
 def wrist_load_balance_reward(
   env: ManagerBasedRlEnv,
   std: float,
   sensor_site_cfg: SceneEntityCfg,
   force_sensor_names: tuple[str, str],
   torque_sensor_names: tuple[str, str],
+  tracking_command_name: str | None = None,
+  tracking_std: float = 0.5,
+  tracking_min_factor: float = 0.1,
 ) -> torch.Tensor:
   """Reward equal gravity-axis load sharing between the two wrists."""
   asset: Entity = env.scene[sensor_site_cfg.name]
@@ -51,7 +105,16 @@ def wrist_load_balance_reward(
     support_load[:, 0] + support_load[:, 1] + 1.0
   )
   env.extras["log"]["Metrics/wrist_load_imbalance"] = torch.mean(imbalance)
-  return torch.exp(-torch.square(imbalance) / std**2)
+  reward = torch.exp(-torch.square(imbalance) / std**2)
+  if tracking_command_name is not None:
+    reward *= command_tracking_gate(
+      env,
+      command_name=tracking_command_name,
+      std=tracking_std,
+      min_factor=tracking_min_factor,
+      entity_name=sensor_site_cfg.name,
+    )
+  return reward
 
 
 def tray_tipping_moment_reward(
@@ -61,6 +124,9 @@ def tray_tipping_moment_reward(
   sensor_site_cfg: SceneEntityCfg,
   force_sensor_names: tuple[str, str],
   torque_sensor_names: tuple[str, str],
+  tracking_command_name: str | None = None,
+  tracking_std: float = 0.5,
+  tracking_min_factor: float = 0.1,
 ) -> torch.Tensor:
   """Reward a small net roll/pitch moment about the tray origin."""
   asset: Entity = env.scene[sensor_site_cfg.name]
@@ -96,7 +162,16 @@ def tray_tipping_moment_reward(
   net_moment_t = torch.sum(torque_t + torch.cross(lever_t, force_t, dim=-1), dim=1)
   tipping_moment = torch.linalg.vector_norm(net_moment_t[:, :2], dim=-1)
   env.extras["log"]["Metrics/tray_tipping_moment_nm"] = torch.mean(tipping_moment)
-  return torch.exp(-torch.square(tipping_moment) / std**2)
+  reward = torch.exp(-torch.square(tipping_moment) / std**2)
+  if tracking_command_name is not None:
+    reward *= command_tracking_gate(
+      env,
+      command_name=tracking_command_name,
+      std=tracking_std,
+      min_factor=tracking_min_factor,
+      entity_name=tray_cfg.name,
+    )
+  return reward
 
 
 class wrist_force_rate_penalty:
@@ -153,11 +228,23 @@ def tray_level_reward(
   env: ManagerBasedRlEnv,
   std: float,
   tray_cfg: SceneEntityCfg,
+  tracking_command_name: str | None = None,
+  tracking_std: float = 0.5,
+  tracking_min_factor: float = 0.1,
 ) -> torch.Tensor:
   """Reward a horizontal tray using its gravity projection."""
   gravity_t = tray_projected_gravity(env, tray_cfg)
   tilt_error_sq = torch.sum(torch.square(gravity_t[:, :2]), dim=-1)
-  return torch.exp(-tilt_error_sq / std**2)
+  reward = torch.exp(-tilt_error_sq / std**2)
+  if tracking_command_name is not None:
+    reward *= command_tracking_gate(
+      env,
+      command_name=tracking_command_name,
+      std=tracking_std,
+      min_factor=tracking_min_factor,
+      entity_name=tray_cfg.name,
+    )
+  return reward
 
 
 def payload_position_on_tray_reward(
@@ -166,12 +253,24 @@ def payload_position_on_tray_reward(
   desired_pos_t: tuple[float, float, float],
   tray_cfg: SceneEntityCfg,
   payload_cfg: SceneEntityCfg,
+  tracking_command_name: str | None = None,
+  tracking_std: float = 0.5,
+  tracking_min_factor: float = 0.1,
 ) -> torch.Tensor:
   """Reward keeping the free payload centered on the tray surface."""
   position_t = payload_pos_t(env, tray_cfg, payload_cfg)
   desired = torch.tensor(desired_pos_t, device=env.device, dtype=position_t.dtype)
   error_sq = torch.sum(torch.square(position_t - desired), dim=-1)
-  return torch.exp(-error_sq / std**2)
+  reward = torch.exp(-error_sq / std**2)
+  if tracking_command_name is not None:
+    reward *= command_tracking_gate(
+      env,
+      command_name=tracking_command_name,
+      std=tracking_std,
+      min_factor=tracking_min_factor,
+      entity_name=tray_cfg.name,
+    )
+  return reward
 
 
 def payload_relative_motion_reward(
@@ -180,12 +279,24 @@ def payload_relative_motion_reward(
   ang_vel_std: float,
   tray_cfg: SceneEntityCfg,
   payload_cfg: SceneEntityCfg,
+  tracking_command_name: str | None = None,
+  tracking_std: float = 0.5,
+  tracking_min_factor: float = 0.1,
 ) -> torch.Tensor:
   """Reward low payload motion relative to the moving tray."""
   relative_velocity_t = payload_relative_velocity_t(env, tray_cfg, payload_cfg)
   lin_error_sq = torch.sum(torch.square(relative_velocity_t[:, :3]), dim=-1)
   ang_error_sq = torch.sum(torch.square(relative_velocity_t[:, 3:]), dim=-1)
-  return torch.exp(-lin_error_sq / lin_vel_std**2 - ang_error_sq / ang_vel_std**2)
+  reward = torch.exp(-lin_error_sq / lin_vel_std**2 - ang_error_sq / ang_vel_std**2)
+  if tracking_command_name is not None:
+    reward *= command_tracking_gate(
+      env,
+      command_name=tracking_command_name,
+      std=tracking_std,
+      min_factor=tracking_min_factor,
+      entity_name=tray_cfg.name,
+    )
+  return reward
 
 
 def payload_dropped(
