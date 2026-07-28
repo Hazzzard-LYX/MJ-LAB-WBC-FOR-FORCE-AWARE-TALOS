@@ -174,6 +174,20 @@ def test_free_payload_tray_task_adds_state_and_balance_objectives() -> None:
   assert cfg.rewards["wrist_load_balance"].weight > 0
   assert cfg.rewards["tray_tipping_moment"].weight > 0
   assert cfg.rewards["wrist_force_rate"].weight < 0
+  assert cfg.rewards["track_linear_velocity"].weight == pytest.approx(4.0)
+  assert cfg.rewards["planar_velocity_tracking_error"].weight < 0
+  assert cfg.rewards["torso_height"].weight < 0
+  for reward_name in (
+    "tray_level",
+    "payload_position_on_tray",
+    "payload_relative_motion",
+    "wrist_load_balance",
+    "tray_tipping_moment",
+  ):
+    reward = cfg.rewards[reward_name]
+    assert reward.params["tracking_command_name"] == "twist"
+    assert reward.params["tracking_std"] == pytest.approx(0.5)
+    assert reward.params["tracking_min_factor"] == pytest.approx(0.1)
   assert cfg.terminations["payload_dropped"] is not None
   assert (
     pal_talos_free_payload_tray_ppo_runner_cfg().experiment_name

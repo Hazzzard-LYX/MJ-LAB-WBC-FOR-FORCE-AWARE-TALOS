@@ -534,10 +534,30 @@ def pal_talos_free_payload_tray_flat_env_cfg(
     site_names=TALOS_WRIST_FT_SITE_NAMES,
     preserve_order=True,
   )
+  transport_tracking_gate = {
+    "tracking_command_name": "twist",
+    "tracking_std": 0.5,
+    "tracking_min_factor": 0.1,
+  }
+  cfg.rewards["track_linear_velocity"].weight = 4.0
+  cfg.rewards["planar_velocity_tracking_error"] = RewardTermCfg(
+    func=pal_mdp.planar_velocity_tracking_error,
+    weight=-2.0,
+    params={"command_name": "twist"},
+  )
+  cfg.rewards["torso_height"] = RewardTermCfg(
+    func=pal_mdp.torso_height,
+    weight=-0.5,
+    params={"z_des": 1.0, "std": 0.1},
+  )
   cfg.rewards["tray_level"] = RewardTermCfg(
     func=pal_mdp.tray_level_reward,
     weight=2.0,
-    params={"std": 0.25, "tray_cfg": tray_cfg},
+    params={
+      "std": 0.25,
+      "tray_cfg": tray_cfg,
+      **transport_tracking_gate,
+    },
   )
   cfg.rewards["payload_position_on_tray"] = RewardTermCfg(
     func=pal_mdp.payload_position_on_tray_reward,
@@ -547,6 +567,7 @@ def pal_talos_free_payload_tray_flat_env_cfg(
       "desired_pos_t": (0.0, 0.0, 0.1325),
       "tray_cfg": tray_cfg,
       "payload_cfg": payload_cfg,
+      **transport_tracking_gate,
     },
   )
   cfg.rewards["payload_relative_motion"] = RewardTermCfg(
@@ -557,6 +578,7 @@ def pal_talos_free_payload_tray_flat_env_cfg(
       "ang_vel_std": 1.0,
       "tray_cfg": tray_cfg,
       "payload_cfg": payload_cfg,
+      **transport_tracking_gate,
     },
   )
   cfg.rewards["wrist_load_balance"] = RewardTermCfg(
@@ -567,6 +589,7 @@ def pal_talos_free_payload_tray_flat_env_cfg(
       "sensor_site_cfg": wrist_sensor_site_cfg,
       "force_sensor_names": TALOS_WRIST_FORCE_SENSOR_NAMES,
       "torque_sensor_names": TALOS_WRIST_TORQUE_SENSOR_NAMES,
+      **transport_tracking_gate,
     },
   )
   cfg.rewards["tray_tipping_moment"] = RewardTermCfg(
@@ -582,6 +605,7 @@ def pal_talos_free_payload_tray_flat_env_cfg(
       ),
       "force_sensor_names": TALOS_WRIST_FORCE_SENSOR_NAMES,
       "torque_sensor_names": TALOS_WRIST_TORQUE_SENSOR_NAMES,
+      **transport_tracking_gate,
     },
   )
   cfg.rewards["wrist_force_rate"] = RewardTermCfg(
