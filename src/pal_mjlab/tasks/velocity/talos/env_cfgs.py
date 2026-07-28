@@ -1,16 +1,20 @@
 """PAL Robotics Talos velocity tracking environment configurations."""
 
 import math
+from copy import deepcopy
+from dataclasses import replace
 
+import torch
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp import dr
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers.event_manager import EventTermCfg
-from mjlab.managers.observation_manager import ObservationTermCfg
+from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.sensor import (
+  BuiltinSensorCfg,
   ContactMatch,
   ContactSensorCfg,
   ObjRef,
@@ -20,12 +24,16 @@ from mjlab.sensor import (
 from mjlab.tasks.velocity import mdp
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.tasks.velocity.velocity_env_cfg import make_velocity_env_cfg
+from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
 from pal_mjlab.robots import (
   TALOS_ACTION_SCALE,
+  TALOS_FT_SITE_NAMES,
   TALOS_PAYLOAD_BODY_NAME,
+  TALOS_TORQUE_SENSOR_JOINT_NAMES,
   TALOS_TRAY_BODY_NAME,
   TALOS_TRAY_PAYLOAD_BODY_NAME,
+  TALOS_WRIST_FT_SITE_NAMES,
   get_talos_free_tray_payload_cfg,
   get_talos_payload_robot_cfg,
   get_talos_robot_cfg,
@@ -34,6 +42,22 @@ from pal_mjlab.robots import (
 from pal_mjlab.tasks.velocity import mdp as pal_mdp
 
 TALOS_PAYLOAD_MASS_RANGE = (2.0, 25.0)
+TALOS_TRAY_PAYLOAD_MASS_RANGE = (2.5, 30.0)
+TALOS_MASS_ESTIMATOR_HISTORY_LENGTH = 8
+TALOS_MASS_ESTIMATOR_TERM_NAMES = (
+  "base_lin_vel",
+  "base_ang_vel",
+  "projected_gravity",
+  "joint_pos",
+  "joint_vel",
+  "actions",
+  "imu_lin_acc",
+  "joint_torque_sensors",
+  "left_wrist_ft_force",
+  "left_wrist_ft_torque",
+  "right_wrist_ft_force",
+  "right_wrist_ft_torque",
+)
 TALOS_PAYLOAD_POS_RANGES = {
   0: (0.20, 0.55),
   1: (-0.20, 0.20),
@@ -46,6 +70,156 @@ TALOS_PAYLOAD_ALPHA_RANGE = (
   0.5 * math.log(TALOS_PAYLOAD_MASS_RANGE[0] / 10.0),
   0.5 * math.log(TALOS_PAYLOAD_MASS_RANGE[1] / 10.0),
 )
+TALOS_TRAY_PAYLOAD_ALPHA_RANGE = (
+  0.5 * math.log(TALOS_TRAY_PAYLOAD_MASS_RANGE[0] / 2.5),
+  0.5 * math.log(TALOS_TRAY_PAYLOAD_MASS_RANGE[1] / 2.5),
+)
+
+
+def _sample_uniform_mass_alpha(
+  lower: torch.Tensor,
+  upper: torch.Tensor,
+  shape: tuple[int, ...],
+  device: str,
+) -> torch.Tensor:
+  """Sample pseudo-inertia alpha values that produce uniform physical mass."""
+  lower_scale = torch.exp(2.0 * lower)
+  upper_scale = torch.exp(2.0 * upper)
+  mass_scale = lower_scale + (upper_scale - lower_scale) * torch.rand(
+    shape, device=device
+  )
+  return 0.5 * torch.log(mass_scale)
+
+
+TALOS_UNIFORM_MASS_DISTRIBUTION = dr.Distribution(
+  name="uniform_physical_mass",
+  sample=_sample_uniform_mass_alpha,
+)
+
+TALOS_FORCE_SENSOR_NAMES = tuple(
+  f"robot/{site_name}_force" for site_name in TALOS_FT_SITE_NAMES
+)
+TALOS_TORQUE_SENSOR_NAMES = tuple(
+  f"robot/{site_name}_torque" for site_name in TALOS_FT_SITE_NAMES
+)
+TALOS_WRIST_FORCE_SENSOR_NAMES = TALOS_FORCE_SENSOR_NAMES[:2]
+TALOS_WRIST_TORQUE_SENSOR_NAMES = TALOS_TORQUE_SENSOR_NAMES[:2]
+
+
+def _talos_force_torque_sensor_cfgs() -> tuple[BuiltinSensorCfg, ...]:
+  sensors: list[BuiltinSensorCfg] = []
+  for site_name in TALOS_FT_SITE_NAMES:
+    site_ref = ObjRef(type="site", name=site_name, entity="robot")
+    sensors.extend(
+      (
+        BuiltinSensorCfg(
+          name=f"{site_name}_force",
+          sensor_type="force",
+          obj=site_ref,
+        ),
+        BuiltinSensorCfg(
+          name=f"{site_name}_torque",
+          sensor_type="torque",
+          obj=site_ref,
+        ),
+      )
+    )
+  return tuple(sensors)
+
+
+def _add_talos_hardware_observations(cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
+  """Install the fixed, real-hardware-compatible TALOS actor contract."""
+  actor_terms = cfg.observations["actor"].terms
+  critic_terms = cfg.observations["critic"].terms
+  max_sensor_lag = 0 if play else 1
+
+  # Existing encoder and IMU/state-estimator channels gain bounded latency and
+  # saturation in the actor only.  The critic remains instantaneous and clean.
+  sensor_limits = {
+    "base_lin_vel": (-10.0, 10.0),
+    "base_ang_vel": (-20.0, 20.0),
+    "projected_gravity": (-1.0, 1.0),
+    "joint_pos": (-4.0, 4.0),
+    "joint_vel": (-50.0, 50.0),
+  }
+  for term_name, clip in sensor_limits.items():
+    actor_terms[term_name] = replace(
+      actor_terms[term_name],
+      clip=clip,
+      delay_min_lag=0,
+      delay_max_lag=max_sensor_lag,
+      delay_hold_prob=0.8,
+      delay_update_period=5,
+    )
+
+  actor_terms["imu_lin_acc"] = ObservationTermCfg(
+    func=mdp.builtin_sensor,
+    params={"sensor_name": "robot/imu_lin_acc"},
+    noise=Unoise(n_min=-0.2, n_max=0.2),
+    clip=(-100.0, 100.0),
+    scale=0.1,
+    delay_min_lag=0,
+    delay_max_lag=max_sensor_lag,
+    delay_hold_prob=0.8,
+    delay_update_period=5,
+  )
+  critic_terms["imu_lin_acc"] = ObservationTermCfg(
+    func=mdp.builtin_sensor,
+    params={"sensor_name": "robot/imu_lin_acc"},
+    scale=0.1,
+  )
+
+  instrumented_joints = SceneEntityCfg(
+    "robot",
+    joint_names=TALOS_TORQUE_SENSOR_JOINT_NAMES,
+    preserve_order=True,
+  )
+  actor_terms["joint_torque_sensors"] = ObservationTermCfg(
+    func=pal_mdp.joint_torque_sensor,
+    params={"asset_cfg": instrumented_joints},
+    noise=Unoise(n_min=-1.0, n_max=1.0),
+    clip=(-450.0, 450.0),
+    scale=0.01,
+    delay_min_lag=0,
+    delay_max_lag=max_sensor_lag,
+    delay_hold_prob=0.8,
+    delay_update_period=5,
+  )
+  critic_terms["joint_torque_sensors"] = ObservationTermCfg(
+    func=pal_mdp.joint_torque_sensor,
+    params={
+      "asset_cfg": SceneEntityCfg(
+        "robot",
+        joint_names=TALOS_TORQUE_SENSOR_JOINT_NAMES,
+        preserve_order=True,
+      )
+    },
+    scale=0.01,
+  )
+
+  for site_name in TALOS_FT_SITE_NAMES:
+    for sensor_type, noise, clip, scale in (
+      ("force", 2.0, (-2000.0, 2000.0), 0.01),
+      ("torque", 0.2, (-300.0, 300.0), 0.05),
+    ):
+      term_name = f"{site_name}_{sensor_type}"
+      sensor_name = f"robot/{term_name}"
+      actor_terms[term_name] = ObservationTermCfg(
+        func=mdp.builtin_sensor,
+        params={"sensor_name": sensor_name},
+        noise=Unoise(n_min=-noise, n_max=noise),
+        clip=clip,
+        scale=scale,
+        delay_min_lag=0,
+        delay_max_lag=max_sensor_lag,
+        delay_hold_prob=0.8,
+        delay_update_period=5,
+      )
+      critic_terms[term_name] = ObservationTermCfg(
+        func=mdp.builtin_sensor,
+        params={"sensor_name": sensor_name},
+        scale=scale,
+      )
 
 
 def pal_talos_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
@@ -118,7 +292,9 @@ def pal_talos_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     self_collision_cfg,
     body_ground_cfg,
     foot_height_scan,
+    *_talos_force_torque_sensor_cfgs(),
   )
+  _add_talos_hardware_observations(cfg, play=play)
 
   if cfg.scene.terrain is not None and cfg.scene.terrain.terrain_generator is not None:
     cfg.scene.terrain.terrain_generator.curriculum = True
@@ -277,8 +453,7 @@ def pal_talos_payload_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       clip=(0.0, 50.0),
     ),
   }
-  for group_name in ("actor", "critic"):
-    cfg.observations[group_name].terms.update(payload_terms)
+  cfg.observations["critic"].terms.update(payload_terms)
 
   # Sample one physically consistent payload variant per parallel environment.
   # Parameters stay fixed within an environment, avoiding costly inertial model
@@ -352,9 +527,13 @@ def pal_talos_free_payload_tray_flat_env_cfg(
       clip=(0.0, 50.0),
     ),
   }
-  for group_name in ("actor", "critic"):
-    cfg.observations[group_name].terms.update(payload_terms)
+  cfg.observations["critic"].terms.update(payload_terms)
 
+  wrist_sensor_site_cfg = SceneEntityCfg(
+    "robot",
+    site_names=TALOS_WRIST_FT_SITE_NAMES,
+    preserve_order=True,
+  )
   cfg.rewards["tray_level"] = RewardTermCfg(
     func=pal_mdp.tray_level_reward,
     weight=2.0,
@@ -380,6 +559,39 @@ def pal_talos_free_payload_tray_flat_env_cfg(
       "payload_cfg": payload_cfg,
     },
   )
+  cfg.rewards["wrist_load_balance"] = RewardTermCfg(
+    func=pal_mdp.wrist_load_balance_reward,
+    weight=1.0,
+    params={
+      "std": 0.25,
+      "sensor_site_cfg": wrist_sensor_site_cfg,
+      "force_sensor_names": TALOS_WRIST_FORCE_SENSOR_NAMES,
+      "torque_sensor_names": TALOS_WRIST_TORQUE_SENSOR_NAMES,
+    },
+  )
+  cfg.rewards["tray_tipping_moment"] = RewardTermCfg(
+    func=pal_mdp.tray_tipping_moment_reward,
+    weight=1.0,
+    params={
+      "std": 20.0,
+      "tray_cfg": tray_cfg,
+      "sensor_site_cfg": SceneEntityCfg(
+        "robot",
+        site_names=TALOS_WRIST_FT_SITE_NAMES,
+        preserve_order=True,
+      ),
+      "force_sensor_names": TALOS_WRIST_FORCE_SENSOR_NAMES,
+      "torque_sensor_names": TALOS_WRIST_TORQUE_SENSOR_NAMES,
+    },
+  )
+  cfg.rewards["wrist_force_rate"] = RewardTermCfg(
+    func=pal_mdp.wrist_force_rate_penalty,
+    weight=-0.02,
+    params={
+      "force_sensor_names": TALOS_WRIST_FORCE_SENSOR_NAMES,
+      "max_force_rate": 5000.0,
+    },
+  )
   cfg.terminations["payload_dropped"] = TerminationTermCfg(
     func=pal_mdp.payload_dropped,
     params={
@@ -389,5 +601,70 @@ def pal_talos_free_payload_tray_flat_env_cfg(
       "tray_cfg": tray_cfg,
       "payload_cfg": payload_cfg,
     },
+  )
+  return cfg
+
+
+def pal_talos_random_mass_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create the critic-privileged random-mass tray transport baseline."""
+  cfg = pal_talos_free_payload_tray_flat_env_cfg(play=play)
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  cfg.events["payload_inertia"] = EventTermCfg(
+    mode="startup",
+    func=dr.pseudo_inertia,
+    params={
+      "asset_cfg": payload_cfg,
+      "alpha_range": TALOS_TRAY_PAYLOAD_ALPHA_RANGE,
+      "distribution": TALOS_UNIFORM_MASS_DISTRIBUTION,
+    },
+  )
+  return cfg
+
+
+def pal_talos_estimated_mass_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create random-mass transport with a deployable learned mass estimator."""
+  cfg = pal_talos_random_mass_tray_flat_env_cfg(play=play)
+  actor_group = cfg.observations["actor"]
+  estimator_terms = {
+    name: deepcopy(actor_group.terms[name]) for name in TALOS_MASS_ESTIMATOR_TERM_NAMES
+  }
+  cfg.observations["mass_estimator"] = ObservationGroupCfg(
+    terms=estimator_terms,
+    concatenate_terms=True,
+    enable_corruption=actor_group.enable_corruption,
+    history_length=TALOS_MASS_ESTIMATOR_HISTORY_LENGTH,
+    flatten_history_dim=True,
+  )
+
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  cfg.observations["payload_mass_target"] = ObservationGroupCfg(
+    terms={
+      "payload_mass": ObservationTermCfg(
+        func=pal_mdp.payload_mass,
+        params={"asset_cfg": payload_cfg},
+        clip=TALOS_TRAY_PAYLOAD_MASS_RANGE,
+      )
+    },
+    concatenate_terms=True,
+    enable_corruption=False,
+  )
+  return cfg
+
+
+def pal_talos_oracle_mass_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create random-mass transport with true payload mass exposed to the actor."""
+  cfg = pal_talos_random_mass_tray_flat_env_cfg(play=play)
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  cfg.observations["actor"].terms["payload_mass_oracle"] = ObservationTermCfg(
+    func=pal_mdp.payload_mass,
+    params={"asset_cfg": payload_cfg},
+    clip=TALOS_TRAY_PAYLOAD_MASS_RANGE,
+    scale=1.0 / TALOS_TRAY_PAYLOAD_MASS_RANGE[1],
   )
   return cfg

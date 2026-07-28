@@ -34,13 +34,16 @@ def test_payload_is_a_fixed_child_of_torso() -> None:
   assert tuple(model.geom_size[geom.id]) == TALOS_PAYLOAD_HALF_SIZE
 
 
-def test_payload_observations_are_added_to_actor_and_critic() -> None:
+def test_payload_state_is_privileged_to_the_critic() -> None:
   cfg = pal_talos_payload_flat_env_cfg()
 
-  for group_name in ("actor", "critic"):
-    terms = cfg.observations[group_name].terms
-    assert terms["payload_com_pos_b"] is not None
-    assert terms["payload_mass"] is not None
+  actor_terms = cfg.observations["actor"].terms
+  assert "payload_com_pos_b" not in actor_terms
+  assert "payload_mass" not in actor_terms
+
+  critic_terms = cfg.observations["critic"].terms
+  assert critic_terms["payload_com_pos_b"] is not None
+  assert critic_terms["payload_mass"] is not None
 
   robot_cfg = cfg.scene.entities["robot"]
   assert robot_cfg.spec_fn is get_payload_spec

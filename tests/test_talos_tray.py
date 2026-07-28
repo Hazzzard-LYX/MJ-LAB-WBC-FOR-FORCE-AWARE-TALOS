@@ -3,8 +3,12 @@ import re
 import mujoco
 import numpy as np
 import pytest
+import torch
 from pal_mjlab.robots.pal_talos.talos_constants import (
   INIT_STATE,
+  TALOS_FT_SITE_BODIES,
+  TALOS_FT_SITE_NAMES,
+  TALOS_TORQUE_SENSOR_JOINT_NAMES,
   TALOS_TRAY_BODY_NAME,
   TALOS_TRAY_HALF_SIZE,
   TALOS_TRAY_HANDLE_POSITIONS,
@@ -17,17 +21,34 @@ from pal_mjlab.robots.pal_talos.talos_constants import (
   TALOS_TRAY_RIGHT_MOUNT_SITE_NAME,
   TALOS_TRAY_RIGHT_WRIST_SITE_NAME,
   TALOS_TRAY_SECONDARY_BODY_NAME,
+  TALOS_WRIST_FT_SITE_NAMES,
   get_free_tray_payload_spec,
+  get_spec,
   get_talos_free_tray_payload_cfg,
   get_talos_tray_robot_cfg,
   get_tray_spec,
 )
 from pal_mjlab.tasks.velocity.talos.env_cfgs import (
+  TALOS_FORCE_SENSOR_NAMES,
+  TALOS_MASS_ESTIMATOR_HISTORY_LENGTH,
+  TALOS_TORQUE_SENSOR_NAMES,
+  TALOS_TRAY_PAYLOAD_ALPHA_RANGE,
+  TALOS_TRAY_PAYLOAD_MASS_RANGE,
+  TALOS_UNIFORM_MASS_DISTRIBUTION,
+  pal_talos_estimated_mass_tray_flat_env_cfg,
+  pal_talos_flat_env_cfg,
   pal_talos_free_payload_tray_flat_env_cfg,
+  pal_talos_oracle_mass_tray_flat_env_cfg,
+  pal_talos_payload_flat_env_cfg,
+  pal_talos_random_mass_tray_flat_env_cfg,
+  pal_talos_rough_env_cfg,
   pal_talos_tray_flat_env_cfg,
 )
 from pal_mjlab.tasks.velocity.talos.rl_cfg import (
+  pal_talos_estimated_mass_tray_ppo_runner_cfg,
   pal_talos_free_payload_tray_ppo_runner_cfg,
+  pal_talos_oracle_mass_tray_ppo_runner_cfg,
+  pal_talos_random_mass_tray_ppo_runner_cfg,
   pal_talos_tray_ppo_runner_cfg,
 )
 
@@ -68,6 +89,13 @@ def test_tray_is_a_fixed_child_of_left_wrist() -> None:
     assert handle.type == mujoco.mjtGeom.mjGEOM_CYLINDER
     np.testing.assert_allclose(handle.pos, handle_pos, atol=1e-12)
     np.testing.assert_allclose(handle.quat, (1.0, 0.0, 0.0, 0.0), atol=1e-12)
+
+
+def test_talos_has_four_force_torque_measurement_sites() -> None:
+  model = get_spec().compile()
+  for site_name, body_name in TALOS_FT_SITE_BODIES.items():
+    site_id = model.site(site_name).id
+    assert model.site_bodyid[site_id] == model.body(body_name).id
 
 
 def test_right_wrist_weld_is_aligned_at_initial_state() -> None:
@@ -128,18 +156,137 @@ def test_free_payload_tray_task_adds_state_and_balance_objectives() -> None:
   assert cfg.scene.entities["robot"].spec_fn is get_tray_spec
   assert cfg.scene.entities["payload"].spec_fn is get_free_tray_payload_spec
 
-  for group_name in ("actor", "critic"):
-    terms = cfg.observations[group_name].terms
-    assert terms["payload_pos_t"] is not None
-    assert terms["payload_relative_velocity_t"] is not None
-    assert terms["payload_mass"] is not None
+  actor_terms = cfg.observations["actor"].terms
+  assert "payload_pos_t" not in actor_terms
+  assert "payload_relative_velocity_t" not in actor_terms
+  assert "payload_mass" not in actor_terms
+
+  critic_terms = cfg.observations["critic"].terms
+  assert critic_terms["payload_pos_t"] is not None
+  assert critic_terms["payload_relative_velocity_t"] is not None
+  assert critic_terms["payload_mass"] is not None
 
   assert cfg.events["reset_payload_on_tray"].mode == "reset"
+  assert "payload_inertia" not in cfg.events
   assert cfg.rewards["tray_level"].weight > 0
   assert cfg.rewards["payload_position_on_tray"].weight > 0
   assert cfg.rewards["payload_relative_motion"].weight > 0
+  assert cfg.rewards["wrist_load_balance"].weight > 0
+  assert cfg.rewards["tray_tipping_moment"].weight > 0
+  assert cfg.rewards["wrist_force_rate"].weight < 0
   assert cfg.terminations["payload_dropped"] is not None
   assert (
     pal_talos_free_payload_tray_ppo_runner_cfg().experiment_name
     == "talos_free_payload_tray_velocity"
+  )
+
+
+def test_actor_contract_contains_only_hardware_available_payload_feedback() -> None:
+  task_cfgs = (
+    pal_talos_rough_env_cfg(),
+    pal_talos_flat_env_cfg(),
+    pal_talos_payload_flat_env_cfg(),
+    pal_talos_tray_flat_env_cfg(),
+    pal_talos_free_payload_tray_flat_env_cfg(),
+  )
+  actor_term_names = tuple(task_cfgs[0].observations["actor"].terms)
+  assert all(
+    tuple(cfg.observations["actor"].terms) == actor_term_names for cfg in task_cfgs
+  )
+
+  actor_terms = task_cfgs[-1].observations["actor"].terms
+  assert actor_terms["imu_lin_acc"] is not None
+  torque_term = actor_terms["joint_torque_sensors"]
+  assert torque_term is not None
+  assert torque_term.params["asset_cfg"].joint_names == TALOS_TORQUE_SENSOR_JOINT_NAMES
+  assert torque_term.delay_max_lag == 1
+  assert torque_term.clip == (-450.0, 450.0)
+
+  for site_name in TALOS_FT_SITE_NAMES:
+    for sensor_type in ("force", "torque"):
+      term = actor_terms[f"{site_name}_{sensor_type}"]
+      assert term is not None
+      assert term.delay_max_lag == 1
+      assert term.noise is not None
+
+  play_actor_terms = (
+    pal_talos_free_payload_tray_flat_env_cfg(play=True).observations["actor"].terms
+  )
+  assert play_actor_terms["joint_torque_sensors"].delay_max_lag == 0
+
+
+def test_force_torque_sensors_cover_both_wrists_and_ankles() -> None:
+  cfg = pal_talos_flat_env_cfg()
+  sensor_cfgs = {sensor.prefixed_name: sensor for sensor in cfg.scene.sensors}
+  assert len(TALOS_FORCE_SENSOR_NAMES) == len(TALOS_TORQUE_SENSOR_NAMES) == 4
+  assert TALOS_WRIST_FT_SITE_NAMES == TALOS_FT_SITE_NAMES[:2]
+
+  for sensor_name in TALOS_FORCE_SENSOR_NAMES:
+    assert sensor_cfgs[sensor_name].sensor_type == "force"
+  for sensor_name in TALOS_TORQUE_SENSOR_NAMES:
+    assert sensor_cfgs[sensor_name].sensor_type == "torque"
+
+
+def test_random_mass_baseline_only_privileges_the_critic() -> None:
+  cfg = pal_talos_random_mass_tray_flat_env_cfg()
+  inertia = cfg.events["payload_inertia"]
+  assert inertia.mode == "startup"
+  assert inertia.params["alpha_range"] == TALOS_TRAY_PAYLOAD_ALPHA_RANGE
+  assert inertia.params["distribution"] is TALOS_UNIFORM_MASS_DISTRIBUTION
+  assert "payload_mass" in cfg.observations["critic"].terms
+  assert "payload_mass_oracle" not in cfg.observations["actor"].terms
+  assert "mass_estimator" not in cfg.observations
+  assert TALOS_TRAY_PAYLOAD_MASS_RANGE == (2.5, 30.0)
+  assert (
+    pal_talos_random_mass_tray_ppo_runner_cfg().experiment_name
+    == "talos_random_mass_tray_critic_velocity"
+  )
+
+
+def test_randomized_payload_mass_is_uniform_in_kilograms() -> None:
+  lower = torch.tensor(TALOS_TRAY_PAYLOAD_ALPHA_RANGE[0])
+  upper = torch.tensor(TALOS_TRAY_PAYLOAD_ALPHA_RANGE[1])
+  alpha = TALOS_UNIFORM_MASS_DISTRIBUTION.sample(lower, upper, (100_000,), "cpu")
+  mass = TALOS_TRAY_PAYLOAD_MASS_RANGE[0] * torch.exp(2.0 * alpha)
+
+  assert mass.min() >= TALOS_TRAY_PAYLOAD_MASS_RANGE[0]
+  assert mass.max() <= TALOS_TRAY_PAYLOAD_MASS_RANGE[1]
+  expected_mean = sum(TALOS_TRAY_PAYLOAD_MASS_RANGE) / 2.0
+  assert mass.mean().item() == pytest.approx(expected_mean, abs=0.1)
+
+
+def test_estimated_mass_task_uses_only_hardware_history_and_a_training_target() -> None:
+  cfg = pal_talos_estimated_mass_tray_flat_env_cfg()
+  estimator_group = cfg.observations["mass_estimator"]
+  assert estimator_group.history_length == TALOS_MASS_ESTIMATOR_HISTORY_LENGTH
+  assert estimator_group.flatten_history_dim
+  assert "payload_mass" not in estimator_group.terms
+  assert "payload_pos_t" not in estimator_group.terms
+  assert "payload_relative_velocity_t" not in estimator_group.terms
+  assert "joint_torque_sensors" in estimator_group.terms
+  assert "left_wrist_ft_force" in estimator_group.terms
+  assert "right_wrist_ft_force" in estimator_group.terms
+
+  target_group = cfg.observations["payload_mass_target"]
+  assert tuple(target_group.terms) == ("payload_mass",)
+  assert not target_group.enable_corruption
+  assert "payload_mass_target" not in cfg.observations["actor"].terms
+
+  runner_cfg = pal_talos_estimated_mass_tray_ppo_runner_cfg()
+  assert "PayloadMassEstimatorModel" in runner_cfg.actor.class_name
+  assert "PayloadMassEstimatorPPO" in runner_cfg.algorithm.class_name
+  assert runner_cfg.obs_groups["actor"] == ("actor",)
+  assert runner_cfg.obs_groups["mass_estimator"] == ("mass_estimator",)
+
+
+def test_oracle_task_exposes_only_scaled_true_mass_to_actor() -> None:
+  cfg = pal_talos_oracle_mass_tray_flat_env_cfg()
+  oracle = cfg.observations["actor"].terms["payload_mass_oracle"]
+  assert oracle.clip == TALOS_TRAY_PAYLOAD_MASS_RANGE
+  assert oracle.scale == pytest.approx(1.0 / TALOS_TRAY_PAYLOAD_MASS_RANGE[1])
+  assert "payload_pos_t" not in cfg.observations["actor"].terms
+  assert "payload_relative_velocity_t" not in cfg.observations["actor"].terms
+  assert (
+    pal_talos_oracle_mass_tray_ppo_runner_cfg().experiment_name
+    == "talos_random_mass_tray_oracle_velocity"
   )

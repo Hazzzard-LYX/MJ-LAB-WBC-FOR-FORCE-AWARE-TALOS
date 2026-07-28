@@ -8,9 +8,38 @@ the PAL Robotics TALOS humanoid.
 
 The current MJLab implementation trains TALOS to track planar velocity while
 carrying a tray with a free payload. The tray is mounted to both wrists and the
-payload is governed by contact dynamics rather than a fixed joint. The next
-stage is to expose physically measurable force/torque signals to the policy and
-develop force-aware transport objectives.
+payload is governed by contact dynamics rather than a fixed joint. The policy
+uses a fixed, hardware-deployable sensor contract and force-aware transport
+objectives.
+
+The base 153-dimensional actor input is identical across deployable TALOS tasks.
+It contains joint encoder position and velocity, IMU/state-estimator channels,
+the previous action and velocity command, 24 instrumented joint-torque
+measurements, and the four wrist/ankle six-axis F/T measurements available on
+the real robot. Unobservable payload position and velocity are restricted to
+the critic. Actor sensor channels include noise, saturation, and bounded
+latency during training.
+
+## Payload-mass experiments
+
+The free cube is a standalone six-DoF body. It can slide, tip, and fall from the
+tray under contact dynamics. Four registered tasks isolate how payload mass is
+provided to the policy:
+
+| Task suffix | Payload mass | Actor mass input | Critic mass input |
+| --- | --- | --- | --- |
+| `Free-Payload-Tray-Fixed-2p5kg` | fixed 2.5 kg | none | true |
+| `Tray-Random-Mass-Critic` | random 2.5--30 kg | none | true |
+| `Tray-Random-Mass-Estimator` | random 2.5--30 kg | learned estimate | true |
+| `Tray-Random-Mass-Oracle` | random 2.5--30 kg | true | true |
+
+The estimator task uses an eight-step history made only from deployable
+proprioception: encoder state, previous action, IMU channels, instrumented joint
+torques, and both wrist F/T sensors. An auxiliary supervised loss predicts the
+simulator payload mass. The simulator target is not part of the Actor
+observation. Its ONNX export has two inputs (`actor_obs` and
+`proprioceptive_history`) and returns both `actions` and
+`estimated_payload_mass_kg`.
 
 This repository is derived from
 [PAL Robotics' pal_mjlab](https://github.com/pal-robotics/pal_mjlab). The
@@ -79,9 +108,18 @@ Start a headless training run:
 
 ```bash
 uv run train Mjlab-Velocity-Flat-Pal-Talos-Free-Payload-Tray \
-  --env.scene.num-envs 1024 \
-  --device cuda:0 \
-  --headless
+  --env.scene.num-envs 1024
+```
+
+Train the three random-mass comparisons:
+
+```bash
+uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Critic \
+  --env.scene.num-envs 1024
+uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Estimator \
+  --env.scene.num-envs 1024
+uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Oracle \
+  --env.scene.num-envs 1024
 ```
 
 ## IAS Cluster
@@ -94,10 +132,23 @@ in this repository.
 
 All simulation and training on the IAS Cluster must run on a SLURM compute
 node. The `mn` login node is only for lightweight repository, file, and job
-submission operations.
+submission operations. The project SLURM scripts use the validated shared
+environment at `~/IAS_Workspace/envs/mjlab-cu128` by default and execute the
+checked-out source through `PYTHONPATH`; no OCI import or image rebuild is
+required for routine code changes.
 
-The reproducible MJLab image and finite GPU validation workflow are documented
-in [`containers/mjlab/README.md`](containers/mjlab/README.md).
+Submit a random-mass experiment with:
+
+```bash
+sbatch --export=ALL,NUM_ENVS=2816,\
+TASK=Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Critic \
+  slurm/mjlab-train.sbatch
+```
+
+Set `MJLAB_ENV_ROOT` only when deliberately using a different tested
+environment. The container recipe in
+[`containers/mjlab/README.md`](containers/mjlab/README.md) remains available
+for isolated reproducibility work.
 
 ## Git workflow
 

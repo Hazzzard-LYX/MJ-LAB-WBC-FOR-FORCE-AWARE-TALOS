@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=mjlab-smoke
+#SBATCH --job-name=mjlab-train
 #SBATCH --output=/home/stud_yuxuan1/IAS_Workspace/logs/%x-%j.out
 #SBATCH --error=/home/stud_yuxuan1/IAS_Workspace/logs/%x-%j.err
-#SBATCH --time=00:30:00
+#SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=4G
+#SBATCH --mem=32G
 #SBATCH --partition=stud
 #SBATCH --gres=gpu:rtx3080:1
 
@@ -15,7 +15,13 @@ PROJECT_ROOT="${WORKSPACE}/projects/WBC-For-Talos"
 MJLAB_ENV_ROOT="${MJLAB_ENV_ROOT:-${WORKSPACE}/envs/mjlab-cu128}"
 PYTHON="${MJLAB_ENV_ROOT}/bin/python"
 SHORT_REVISION="$(git -C "${PROJECT_ROOT}" rev-parse --short=12 HEAD)"
-RUN_ROOT="${WORKSPACE}/logs/mjlab-smoke/${SLURM_JOB_ID}"
+TASK="${TASK:-Mjlab-Velocity-Flat-Pal-Talos-Free-Payload-Tray}"
+NUM_ENVS="${NUM_ENVS:?Submit with --export=ALL,NUM_ENVS=<count>}"
+MAX_ITERATIONS="${MAX_ITERATIONS:-30000}"
+SAVE_INTERVAL="${SAVE_INTERVAL:-100}"
+SEED="${SEED:-42}"
+RUN_NAME="${RUN_NAME:-${SHORT_REVISION}-${NUM_ENVS}env}"
+RUN_ROOT="${WORKSPACE}/logs/mjlab-training/${SHORT_REVISION}/${SLURM_JOB_ID}"
 CACHE_ROOT="${WORKSPACE}/shared/mjlab-cache"
 
 export TMPDIR="${SLURM_TMPDIR:-${WORKSPACE}/tmp/${SLURM_JOB_ID}}"
@@ -31,28 +37,24 @@ echo "Node: $(hostname)"
 echo "Start: $(date --iso-8601=seconds)"
 echo "Git revision: $(git -C "${PROJECT_ROOT}" rev-parse HEAD)"
 echo "MJLab environment: ${MJLAB_ENV_ROOT}"
+echo "Task: ${TASK}"
+echo "Environments: ${NUM_ENVS}"
+echo "Iterations: ${MAX_ITERATIONS}"
+echo "Seed: ${SEED}"
 nvidia-smi
 
 test -x "${PYTHON}"
 cd "${PROJECT_ROOT}"
-"${PYTHON}" containers/mjlab/smoke.py
-MUJOCO_GL=disable FORCE_CPU=1 "${PYTHON}" -m pytest -q
-
-for TASK in \
-  Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Critic \
-  Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Estimator \
-  Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Oracle
-do
-  TASK_SLUG="${TASK##*-}"
-  "${PYTHON}" -m mjlab.scripts.train \
+"${PYTHON}" -m mjlab.scripts.train \
   "${TASK}" \
-  --env.scene.num-envs 64 \
+  --env.scene.num-envs "${NUM_ENVS}" \
+  --env.seed "${SEED}" \
+  --agent.seed "${SEED}" \
   --agent.logger tensorboard \
-  --agent.max-iterations 1 \
-  --agent.save-interval 1 \
-  --agent.run-name "native-smoke-${TASK_SLUG}" \
-  --log-root "${RUN_ROOT}/${TASK_SLUG}"
-done
+  --agent.max-iterations "${MAX_ITERATIONS}" \
+  --agent.save-interval "${SAVE_INTERVAL}" \
+  --agent.run-name "${RUN_NAME}" \
+  --log-root "${RUN_ROOT}"
 
-echo "MJLAB_GPU_SMOKE_OK"
+echo "MJLAB_TRAINING_OK"
 echo "End: $(date --iso-8601=seconds)"

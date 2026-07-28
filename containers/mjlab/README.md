@@ -70,3 +70,27 @@ when intentionally validating another image:
 sbatch --export=ALL,MJLAB_IMAGE=localhost/force-aware-talos-mjlab:TAG \
   slurm/mjlab-smoke-test.sbatch
 ```
+
+## Capacity probes and training
+
+The production job requires an explicit environment count. A one-iteration
+submission can be used to test whether the complete simulator and PPO buffers
+fit on the allocated GPU:
+
+```bash
+sbatch --export=ALL,NUM_ENVS=4096,MAX_ITERATIONS=1,RUN_NAME=capacity-4096 \
+  slurm/mjlab-train.sbatch
+```
+
+After selecting a stable count, start the full run with the same immutable
+image and task:
+
+```bash
+sbatch --export=ALL,NUM_ENVS=4096,MAX_ITERATIONS=30000 \
+  slurm/mjlab-train.sbatch
+```
+
+Training artifacts are written under
+`~/IAS_Workspace/logs/mjlab-training/<git-sha>/<job-id>/`. Each job records the
+Git revision, image, task, environment count, iteration count, and seed in its
+Slurm output.

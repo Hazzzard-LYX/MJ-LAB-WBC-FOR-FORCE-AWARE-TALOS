@@ -37,6 +37,30 @@ TALOS_TRAY_PAYLOAD_MASS = 2.5
 TALOS_TRAY_PAYLOAD_HALF_SIZE = (0.12, 0.12, 0.12)
 TALOS_TRAY_PAYLOAD_INIT_POS = (0.43, 0.0, 1.2275)
 
+# TALOS exposes four six-axis force/torque sensors: one at each wrist and
+# ankle.  The MuJoCo sites are placed on the child side of each physical
+# transducer so the builtin force and torque sensors report the load
+# transmitted through that joint.  Keep this ordering stable: it is part of
+# the deployable actor observation contract.
+TALOS_FT_SITE_BODIES = {
+  "left_wrist_ft": "arm_left_7_link",
+  "right_wrist_ft": "arm_right_7_link",
+  "left_ankle_ft": "leg_left_6_link",
+  "right_ankle_ft": "leg_right_6_link",
+}
+TALOS_WRIST_FT_SITE_NAMES = ("left_wrist_ft", "right_wrist_ft")
+TALOS_ANKLE_FT_SITE_NAMES = ("left_ankle_ft", "right_ankle_ft")
+TALOS_FT_SITE_NAMES = TALOS_WRIST_FT_SITE_NAMES + TALOS_ANKLE_FT_SITE_NAMES
+
+# Joint-level torque feedback is available on TALOS except at the head and
+# wrists (the grippers are fixed in this model).  These expressions select
+# torso, arm 1--5, and all leg joints: 24 measurements in model order.
+TALOS_TORQUE_SENSOR_JOINT_NAMES = (
+  r"torso_.*_joint",
+  r"arm_.*_[1-5]_joint",
+  r"leg_.*_joint",
+)
+
 # The tray mounting transform is calibrated against INIT_STATE.  At that pose,
 # the tray is horizontal at world position (0.43, 0.0, 1.09), while the two
 # wrist origins are 0.723 m apart.  Two straight cylindrical handles extend
@@ -93,6 +117,13 @@ TALOS_TRAY_GRIPPER_BODY_NAMES = (
 
 def get_spec() -> mujoco.MjSpec:
   spec = mujoco.MjSpec.from_file(str(TALOS_XML))
+  for site_name, body_name in TALOS_FT_SITE_BODIES.items():
+    body = spec.body(body_name)
+    if body is None:
+      raise ValueError(
+        f"TALOS F/T sensor body '{body_name}' was not found in the model."
+      )
+    body.add_site(name=site_name, size=(0.008,))
   return spec
 
 
