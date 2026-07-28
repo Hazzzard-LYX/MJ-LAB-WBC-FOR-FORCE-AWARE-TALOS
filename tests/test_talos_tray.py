@@ -3,6 +3,7 @@ import re
 import mujoco
 import numpy as np
 import pytest
+import torch
 from pal_mjlab.robots.pal_talos.talos_constants import (
   INIT_STATE,
   TALOS_FT_SITE_BODIES,
@@ -29,15 +30,25 @@ from pal_mjlab.robots.pal_talos.talos_constants import (
 )
 from pal_mjlab.tasks.velocity.talos.env_cfgs import (
   TALOS_FORCE_SENSOR_NAMES,
+  TALOS_MASS_ESTIMATOR_HISTORY_LENGTH,
   TALOS_TORQUE_SENSOR_NAMES,
+  TALOS_TRAY_PAYLOAD_ALPHA_RANGE,
+  TALOS_TRAY_PAYLOAD_MASS_RANGE,
+  TALOS_UNIFORM_MASS_DISTRIBUTION,
+  pal_talos_estimated_mass_tray_flat_env_cfg,
   pal_talos_flat_env_cfg,
   pal_talos_free_payload_tray_flat_env_cfg,
+  pal_talos_oracle_mass_tray_flat_env_cfg,
   pal_talos_payload_flat_env_cfg,
+  pal_talos_random_mass_tray_flat_env_cfg,
   pal_talos_rough_env_cfg,
   pal_talos_tray_flat_env_cfg,
 )
 from pal_mjlab.tasks.velocity.talos.rl_cfg import (
+  pal_talos_estimated_mass_tray_ppo_runner_cfg,
   pal_talos_free_payload_tray_ppo_runner_cfg,
+  pal_talos_oracle_mass_tray_ppo_runner_cfg,
+  pal_talos_random_mass_tray_ppo_runner_cfg,
   pal_talos_tray_ppo_runner_cfg,
 )
 
@@ -156,6 +167,7 @@ def test_free_payload_tray_task_adds_state_and_balance_objectives() -> None:
   assert critic_terms["payload_mass"] is not None
 
   assert cfg.events["reset_payload_on_tray"].mode == "reset"
+  assert "payload_inertia" not in cfg.events
   assert cfg.rewards["tray_level"].weight > 0
   assert cfg.rewards["payload_position_on_tray"].weight > 0
   assert cfg.rewards["payload_relative_motion"].weight > 0
@@ -213,3 +225,68 @@ def test_force_torque_sensors_cover_both_wrists_and_ankles() -> None:
     assert sensor_cfgs[sensor_name].sensor_type == "force"
   for sensor_name in TALOS_TORQUE_SENSOR_NAMES:
     assert sensor_cfgs[sensor_name].sensor_type == "torque"
+
+
+def test_random_mass_baseline_only_privileges_the_critic() -> None:
+  cfg = pal_talos_random_mass_tray_flat_env_cfg()
+  inertia = cfg.events["payload_inertia"]
+  assert inertia.mode == "startup"
+  assert inertia.params["alpha_range"] == TALOS_TRAY_PAYLOAD_ALPHA_RANGE
+  assert inertia.params["distribution"] is TALOS_UNIFORM_MASS_DISTRIBUTION
+  assert "payload_mass" in cfg.observations["critic"].terms
+  assert "payload_mass_oracle" not in cfg.observations["actor"].terms
+  assert "mass_estimator" not in cfg.observations
+  assert TALOS_TRAY_PAYLOAD_MASS_RANGE == (2.5, 30.0)
+  assert (
+    pal_talos_random_mass_tray_ppo_runner_cfg().experiment_name
+    == "talos_random_mass_tray_critic_velocity"
+  )
+
+
+def test_randomized_payload_mass_is_uniform_in_kilograms() -> None:
+  lower = torch.tensor(TALOS_TRAY_PAYLOAD_ALPHA_RANGE[0])
+  upper = torch.tensor(TALOS_TRAY_PAYLOAD_ALPHA_RANGE[1])
+  alpha = TALOS_UNIFORM_MASS_DISTRIBUTION.sample(lower, upper, (100_000,), "cpu")
+  mass = TALOS_TRAY_PAYLOAD_MASS_RANGE[0] * torch.exp(2.0 * alpha)
+
+  assert mass.min() >= TALOS_TRAY_PAYLOAD_MASS_RANGE[0]
+  assert mass.max() <= TALOS_TRAY_PAYLOAD_MASS_RANGE[1]
+  expected_mean = sum(TALOS_TRAY_PAYLOAD_MASS_RANGE) / 2.0
+  assert mass.mean().item() == pytest.approx(expected_mean, abs=0.1)
+
+
+def test_estimated_mass_task_uses_only_hardware_history_and_a_training_target() -> None:
+  cfg = pal_talos_estimated_mass_tray_flat_env_cfg()
+  estimator_group = cfg.observations["mass_estimator"]
+  assert estimator_group.history_length == TALOS_MASS_ESTIMATOR_HISTORY_LENGTH
+  assert estimator_group.flatten_history_dim
+  assert "payload_mass" not in estimator_group.terms
+  assert "payload_pos_t" not in estimator_group.terms
+  assert "payload_relative_velocity_t" not in estimator_group.terms
+  assert "joint_torque_sensors" in estimator_group.terms
+  assert "left_wrist_ft_force" in estimator_group.terms
+  assert "right_wrist_ft_force" in estimator_group.terms
+
+  target_group = cfg.observations["payload_mass_target"]
+  assert tuple(target_group.terms) == ("payload_mass",)
+  assert not target_group.enable_corruption
+  assert "payload_mass_target" not in cfg.observations["actor"].terms
+
+  runner_cfg = pal_talos_estimated_mass_tray_ppo_runner_cfg()
+  assert "PayloadMassEstimatorModel" in runner_cfg.actor.class_name
+  assert "PayloadMassEstimatorPPO" in runner_cfg.algorithm.class_name
+  assert runner_cfg.obs_groups["actor"] == ("actor",)
+  assert runner_cfg.obs_groups["mass_estimator"] == ("mass_estimator",)
+
+
+def test_oracle_task_exposes_only_scaled_true_mass_to_actor() -> None:
+  cfg = pal_talos_oracle_mass_tray_flat_env_cfg()
+  oracle = cfg.observations["actor"].terms["payload_mass_oracle"]
+  assert oracle.clip == TALOS_TRAY_PAYLOAD_MASS_RANGE
+  assert oracle.scale == pytest.approx(1.0 / TALOS_TRAY_PAYLOAD_MASS_RANGE[1])
+  assert "payload_pos_t" not in cfg.observations["actor"].terms
+  assert "payload_relative_velocity_t" not in cfg.observations["actor"].terms
+  assert (
+    pal_talos_oracle_mass_tray_ppo_runner_cfg().experiment_name
+    == "talos_random_mass_tray_oracle_velocity"
+  )

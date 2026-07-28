@@ -1,10 +1,42 @@
 """RL configuration for PAL Robotics' Talos velocity task."""
 
+from dataclasses import dataclass
+
 from mjlab.rl import (
   RslRlModelCfg,
   RslRlOnPolicyRunnerCfg,
   RslRlPpoAlgorithmCfg,
 )
+
+from .env_cfgs import (
+  TALOS_MASS_ESTIMATOR_HISTORY_LENGTH,
+  TALOS_TRAY_PAYLOAD_MASS_RANGE,
+)
+
+
+@dataclass
+class PayloadMassEstimatorModelCfg(RslRlModelCfg):
+  """Configuration for the deployable estimator-conditioned actor."""
+
+  class_name: str = (
+    "pal_mjlab.tasks.velocity.talos.mass_estimation:PayloadMassEstimatorModel"
+  )
+  estimator_obs_group: str = "mass_estimator"
+  estimator_hidden_dims: tuple[int, ...] = (256, 128)
+  estimator_activation: str = "elu"
+  estimator_obs_normalization: bool = True
+  payload_mass_range: tuple[float, float] = TALOS_TRAY_PAYLOAD_MASS_RANGE
+
+
+@dataclass
+class PayloadMassEstimatorPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
+  """PPO configuration with a supervised payload-mass auxiliary loss."""
+
+  class_name: str = (
+    "pal_mjlab.tasks.velocity.talos.mass_estimation:PayloadMassEstimatorPPO"
+  )
+  estimator_loss_coef: float = 1.0
+  estimator_target_group: str = "payload_mass_target"
 
 
 def pal_talos_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
@@ -64,4 +96,56 @@ def pal_talos_free_payload_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   """Create a separate runner configuration for free payload tray transport."""
   cfg = pal_talos_ppo_runner_cfg()
   cfg.experiment_name = "talos_free_payload_tray_velocity"
+  return cfg
+
+
+def pal_talos_random_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create the critic-privileged random-payload baseline runner."""
+  cfg = pal_talos_ppo_runner_cfg()
+  cfg.experiment_name = "talos_random_mass_tray_critic_velocity"
+  return cfg
+
+
+def pal_talos_estimated_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create the learned payload-mass estimator experiment runner."""
+  cfg = pal_talos_ppo_runner_cfg()
+  cfg.actor = PayloadMassEstimatorModelCfg(
+    hidden_dims=(512, 256, 128),
+    activation="elu",
+    obs_normalization=True,
+    distribution_cfg={
+      "class_name": "GaussianDistribution",
+      "init_std": 1.0,
+      "std_type": "scalar",
+    },
+  )
+  cfg.algorithm = PayloadMassEstimatorPpoAlgorithmCfg(
+    value_loss_coef=1.0,
+    use_clipped_value_loss=True,
+    clip_param=0.2,
+    entropy_coef=0.01,
+    num_learning_epochs=5,
+    num_mini_batches=4,
+    learning_rate=1.0e-3,
+    schedule="adaptive",
+    gamma=0.99,
+    lam=0.95,
+    desired_kl=0.01,
+    max_grad_norm=1.0,
+  )
+  cfg.obs_groups = {
+    "actor": ("actor",),
+    "critic": ("critic",),
+    "mass_estimator": ("mass_estimator",),
+  }
+  cfg.experiment_name = (
+    f"talos_random_mass_tray_estimator_h{TALOS_MASS_ESTIMATOR_HISTORY_LENGTH}"
+  )
+  return cfg
+
+
+def pal_talos_oracle_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create the true-mass actor-observation upper-bound runner."""
+  cfg = pal_talos_ppo_runner_cfg()
+  cfg.experiment_name = "talos_random_mass_tray_oracle_velocity"
   return cfg

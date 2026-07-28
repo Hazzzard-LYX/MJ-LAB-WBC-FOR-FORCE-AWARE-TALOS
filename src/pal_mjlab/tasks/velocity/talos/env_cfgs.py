@@ -1,13 +1,15 @@
 """PAL Robotics Talos velocity tracking environment configurations."""
 
 import math
+from copy import deepcopy
 from dataclasses import replace
 
+import torch
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp import dr
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers.event_manager import EventTermCfg
-from mjlab.managers.observation_manager import ObservationTermCfg
+from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
@@ -40,6 +42,22 @@ from pal_mjlab.robots import (
 from pal_mjlab.tasks.velocity import mdp as pal_mdp
 
 TALOS_PAYLOAD_MASS_RANGE = (2.0, 25.0)
+TALOS_TRAY_PAYLOAD_MASS_RANGE = (2.5, 30.0)
+TALOS_MASS_ESTIMATOR_HISTORY_LENGTH = 8
+TALOS_MASS_ESTIMATOR_TERM_NAMES = (
+  "base_lin_vel",
+  "base_ang_vel",
+  "projected_gravity",
+  "joint_pos",
+  "joint_vel",
+  "actions",
+  "imu_lin_acc",
+  "joint_torque_sensors",
+  "left_wrist_ft_force",
+  "left_wrist_ft_torque",
+  "right_wrist_ft_force",
+  "right_wrist_ft_torque",
+)
 TALOS_PAYLOAD_POS_RANGES = {
   0: (0.20, 0.55),
   1: (-0.20, 0.20),
@@ -51,6 +69,31 @@ TALOS_PAYLOAD_POS_RANGES = {
 TALOS_PAYLOAD_ALPHA_RANGE = (
   0.5 * math.log(TALOS_PAYLOAD_MASS_RANGE[0] / 10.0),
   0.5 * math.log(TALOS_PAYLOAD_MASS_RANGE[1] / 10.0),
+)
+TALOS_TRAY_PAYLOAD_ALPHA_RANGE = (
+  0.5 * math.log(TALOS_TRAY_PAYLOAD_MASS_RANGE[0] / 2.5),
+  0.5 * math.log(TALOS_TRAY_PAYLOAD_MASS_RANGE[1] / 2.5),
+)
+
+
+def _sample_uniform_mass_alpha(
+  lower: torch.Tensor,
+  upper: torch.Tensor,
+  shape: tuple[int, ...],
+  device: str,
+) -> torch.Tensor:
+  """Sample pseudo-inertia alpha values that produce uniform physical mass."""
+  lower_scale = torch.exp(2.0 * lower)
+  upper_scale = torch.exp(2.0 * upper)
+  mass_scale = lower_scale + (upper_scale - lower_scale) * torch.rand(
+    shape, device=device
+  )
+  return 0.5 * torch.log(mass_scale)
+
+
+TALOS_UNIFORM_MASS_DISTRIBUTION = dr.Distribution(
+  name="uniform_physical_mass",
+  sample=_sample_uniform_mass_alpha,
 )
 
 TALOS_FORCE_SENSOR_NAMES = tuple(
@@ -558,5 +601,70 @@ def pal_talos_free_payload_tray_flat_env_cfg(
       "tray_cfg": tray_cfg,
       "payload_cfg": payload_cfg,
     },
+  )
+  return cfg
+
+
+def pal_talos_random_mass_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create the critic-privileged random-mass tray transport baseline."""
+  cfg = pal_talos_free_payload_tray_flat_env_cfg(play=play)
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  cfg.events["payload_inertia"] = EventTermCfg(
+    mode="startup",
+    func=dr.pseudo_inertia,
+    params={
+      "asset_cfg": payload_cfg,
+      "alpha_range": TALOS_TRAY_PAYLOAD_ALPHA_RANGE,
+      "distribution": TALOS_UNIFORM_MASS_DISTRIBUTION,
+    },
+  )
+  return cfg
+
+
+def pal_talos_estimated_mass_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create random-mass transport with a deployable learned mass estimator."""
+  cfg = pal_talos_random_mass_tray_flat_env_cfg(play=play)
+  actor_group = cfg.observations["actor"]
+  estimator_terms = {
+    name: deepcopy(actor_group.terms[name]) for name in TALOS_MASS_ESTIMATOR_TERM_NAMES
+  }
+  cfg.observations["mass_estimator"] = ObservationGroupCfg(
+    terms=estimator_terms,
+    concatenate_terms=True,
+    enable_corruption=actor_group.enable_corruption,
+    history_length=TALOS_MASS_ESTIMATOR_HISTORY_LENGTH,
+    flatten_history_dim=True,
+  )
+
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  cfg.observations["payload_mass_target"] = ObservationGroupCfg(
+    terms={
+      "payload_mass": ObservationTermCfg(
+        func=pal_mdp.payload_mass,
+        params={"asset_cfg": payload_cfg},
+        clip=TALOS_TRAY_PAYLOAD_MASS_RANGE,
+      )
+    },
+    concatenate_terms=True,
+    enable_corruption=False,
+  )
+  return cfg
+
+
+def pal_talos_oracle_mass_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create random-mass transport with true payload mass exposed to the actor."""
+  cfg = pal_talos_random_mass_tray_flat_env_cfg(play=play)
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  cfg.observations["actor"].terms["payload_mass_oracle"] = ObservationTermCfg(
+    func=pal_mdp.payload_mass,
+    params={"asset_cfg": payload_cfg},
+    clip=TALOS_TRAY_PAYLOAD_MASS_RANGE,
+    scale=1.0 / TALOS_TRAY_PAYLOAD_MASS_RANGE[1],
   )
   return cfg
