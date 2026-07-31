@@ -679,6 +679,21 @@ def pal_talos_estimated_mass_tray_flat_env_cfg(
   return cfg
 
 
+def pal_talos_estimated_mass_zero_joint_torque_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create the estimator experiment with deployable joint torque fixed to zero."""
+  cfg = pal_talos_estimated_mass_tray_flat_env_cfg(play=play)
+  for group_name in ("actor", "mass_estimator"):
+    torque_term = cfg.observations[group_name].terms["joint_torque_sensors"]
+    cfg.observations[group_name].terms["joint_torque_sensors"] = replace(
+      torque_term,
+      func=pal_mdp.zero_joint_torque_sensor,
+      noise=None,
+    )
+  return cfg
+
+
 def pal_talos_oracle_mass_tray_flat_env_cfg(
   play: bool = False,
 ) -> ManagerBasedRlEnvCfg:
