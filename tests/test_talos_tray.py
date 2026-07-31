@@ -36,6 +36,7 @@ from pal_mjlab.tasks.velocity.talos.env_cfgs import (
   TALOS_TRAY_PAYLOAD_MASS_RANGE,
   TALOS_UNIFORM_MASS_DISTRIBUTION,
   pal_talos_estimated_mass_tray_flat_env_cfg,
+  pal_talos_estimated_mass_zero_joint_torque_tray_flat_env_cfg,
   pal_talos_flat_env_cfg,
   pal_talos_free_payload_tray_flat_env_cfg,
   pal_talos_oracle_mass_tray_flat_env_cfg,
@@ -46,6 +47,7 @@ from pal_mjlab.tasks.velocity.talos.env_cfgs import (
 )
 from pal_mjlab.tasks.velocity.talos.rl_cfg import (
   pal_talos_estimated_mass_tray_ppo_runner_cfg,
+  pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg,
   pal_talos_free_payload_tray_ppo_runner_cfg,
   pal_talos_oracle_mass_tray_ppo_runner_cfg,
   pal_talos_random_mass_tray_ppo_runner_cfg,
@@ -291,6 +293,31 @@ def test_estimated_mass_task_uses_only_hardware_history_and_a_training_target() 
   assert "PayloadMassEstimatorPPO" in runner_cfg.algorithm.class_name
   assert runner_cfg.obs_groups["actor"] == ("actor",)
   assert runner_cfg.obs_groups["mass_estimator"] == ("mass_estimator",)
+
+
+def test_estimator_zero_torque_ablation_preserves_observation_contract() -> None:
+  baseline = pal_talos_estimated_mass_tray_flat_env_cfg()
+  ablation = pal_talos_estimated_mass_zero_joint_torque_tray_flat_env_cfg()
+
+  for group_name in ("actor", "mass_estimator"):
+    baseline_group = baseline.observations[group_name]
+    ablation_group = ablation.observations[group_name]
+    assert tuple(ablation_group.terms) == tuple(baseline_group.terms)
+
+    baseline_torque = baseline_group.terms["joint_torque_sensors"]
+    ablation_torque = ablation_group.terms["joint_torque_sensors"]
+    assert ablation_torque.params == baseline_torque.params
+    assert ablation_torque.scale == baseline_torque.scale
+    assert ablation_torque.clip == baseline_torque.clip
+    assert ablation_torque.noise is None
+    assert ablation_torque.func.__name__ == "zero_joint_torque_sensor"
+
+  critic_torque = ablation.observations["critic"].terms["joint_torque_sensors"]
+  assert critic_torque.func.__name__ == "joint_torque_sensor"
+  assert (
+    pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg().experiment_name
+    == "talos_random_mass_tray_estimator_zero_joint_torque_h8"
+  )
 
 
 def test_oracle_task_exposes_only_scaled_true_mass_to_actor() -> None:

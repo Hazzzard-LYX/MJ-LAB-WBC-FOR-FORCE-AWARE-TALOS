@@ -58,6 +58,19 @@ def joint_torque_sensor(
   return asset.data.qfrc_actuator[:, asset_cfg.joint_ids]
 
 
+def zero_joint_torque_sensor(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Return a zeroed joint-torque channel with the sensor's original shape.
+
+  This supports torque-feedback ablations without changing the observation
+  contract or downstream network dimensions.
+  """
+  asset: Entity = env.scene[asset_cfg.name]
+  return torch.zeros_like(asset.data.qfrc_actuator[:, asset_cfg.joint_ids])
+
+
 def force_torque_wrenches_w(
   env: ManagerBasedRlEnv,
   asset_cfg: SceneEntityCfg,

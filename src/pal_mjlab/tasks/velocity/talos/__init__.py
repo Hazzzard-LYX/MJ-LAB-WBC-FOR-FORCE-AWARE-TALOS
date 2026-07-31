@@ -3,6 +3,7 @@ from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
 
 from .env_cfgs import (
   pal_talos_estimated_mass_tray_flat_env_cfg,
+  pal_talos_estimated_mass_zero_joint_torque_tray_flat_env_cfg,
   pal_talos_flat_env_cfg,
   pal_talos_free_payload_tray_flat_env_cfg,
   pal_talos_oracle_mass_tray_flat_env_cfg,
@@ -13,6 +14,7 @@ from .env_cfgs import (
 )
 from .rl_cfg import (
   pal_talos_estimated_mass_tray_ppo_runner_cfg,
+  pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg,
   pal_talos_free_payload_tray_ppo_runner_cfg,
   pal_talos_oracle_mass_tray_ppo_runner_cfg,
   pal_talos_payload_ppo_runner_cfg,
@@ -82,6 +84,16 @@ register_mjlab_task(
   env_cfg=pal_talos_estimated_mass_tray_flat_env_cfg(),
   play_env_cfg=pal_talos_estimated_mass_tray_flat_env_cfg(play=True),
   rl_cfg=pal_talos_estimated_mass_tray_ppo_runner_cfg(),
+  runner_cls=VelocityOnPolicyRunner,
+)
+
+register_mjlab_task(
+  task_id="Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Estimator-Zero-Torque",
+  env_cfg=pal_talos_estimated_mass_zero_joint_torque_tray_flat_env_cfg(),
+  play_env_cfg=pal_talos_estimated_mass_zero_joint_torque_tray_flat_env_cfg(
+    play=True
+  ),
+  rl_cfg=pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg(),
   runner_cls=VelocityOnPolicyRunner,
 )
 

@@ -144,6 +144,17 @@ def pal_talos_estimated_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   return cfg
 
 
+def pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg(
+) -> RslRlOnPolicyRunnerCfg:
+  """Create the estimator runner for the zero-joint-torque ablation."""
+  cfg = pal_talos_estimated_mass_tray_ppo_runner_cfg()
+  cfg.experiment_name = (
+    f"talos_random_mass_tray_estimator_zero_joint_torque_h"
+    f"{TALOS_MASS_ESTIMATOR_HISTORY_LENGTH}"
+  )
+  return cfg
+
+
 def pal_talos_oracle_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   """Create the true-mass actor-observation upper-bound runner."""
   cfg = pal_talos_ppo_runner_cfg()
