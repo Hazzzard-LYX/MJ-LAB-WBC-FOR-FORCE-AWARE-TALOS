@@ -122,6 +122,24 @@ uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Oracle \
   --env.scene.num-envs 1024
 ```
 
+Train TALOS with the tray held only by rigid high-friction hand contacts (no
+weld or fixed tray joint).  Start with the fixed 2.5 kg task and its staged
+standing/walking command curriculum, then use the random-mass task once
+bilateral grasping and walking are stable:
+
+```bash
+uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp \
+  --env.scene.num-envs 1024
+uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp-Random-Mass \
+  --env.scene.num-envs 1024
+```
+
+The actor observes the two real commanded gripper encoders plus the existing
+deployable TALOS proprioception and force/torque channels.  Tray pose, handle
+slip, contacts, and payload truth are critic-only signals.  The restored
+three-finger linkage retains one commanded joint per hand and mechanically
+couples all passive finger joints.
+
 ## IAS Cluster
 
 Shared cluster tooling is pinned as the `third_party/Shared-IAS` submodule.
