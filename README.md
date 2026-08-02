@@ -140,6 +140,11 @@ slip, contacts, and payload truth are critic-only signals.  The restored
 three-finger linkage retains one commanded joint per hand and mechanically
 couples all passive finger joints.
 
+To visualize an early checkpoint from a cluster training job, submit
+`slurm/mjlab-contact-grasp-livestream.sbatch` with `TRAIN_JOB_ID` and the
+12-character `TRAIN_REVISION`.  It waits for `model_100.pt` by default and then
+serves four environments through Viser on remote port 18080.
+
 ## IAS Cluster
 
 Shared cluster tooling is pinned as the `third_party/Shared-IAS` submodule.
