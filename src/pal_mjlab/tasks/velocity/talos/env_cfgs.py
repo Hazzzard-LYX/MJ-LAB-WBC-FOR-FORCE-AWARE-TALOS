@@ -928,6 +928,15 @@ def pal_talos_grasping_tray_flat_env_cfg(
       "tray_cfg": tray_cfg,
     },
   )
+  # Contact-rich gripper exploration can occasionally drive one batched world
+  # into a non-finite MuJoCo state.  Reset only that world before corrupted
+  # physics reaches the next policy observation.  RewardManager sanitizes the
+  # terminal-step reward, and the observation policy below is a final backstop
+  # for derived sensor channels.
+  cfg.terminations["nan_state"] = TerminationTermCfg(func=mdp.nan_detection)
+  for group_name in ("actor", "critic"):
+    cfg.observations[group_name].nan_policy = "sanitize"
+    cfg.observations[group_name].nan_check_per_term = False
 
   joint_pos_action = cfg.actions["joint_pos"]
   assert isinstance(joint_pos_action, JointPositionActionCfg)
@@ -942,20 +951,28 @@ def pal_talos_grasping_tray_flat_env_cfg(
       params={
         "command_name": "twist",
         "velocity_stages": [
-          {"step": 0, "lin_vel_x": (0.0, 0.0), "ang_vel_z": (0.0, 0.0)},
+          {
+            "step": 0,
+            "lin_vel_x": (0.0, 0.0),
+            "lin_vel_y": (0.0, 0.0),
+            "ang_vel_z": (0.0, 0.0),
+          },
           {
             "step": 3000 * 24,
             "lin_vel_x": (-0.15, 0.35),
+            "lin_vel_y": (-0.10, 0.10),
             "ang_vel_z": (-0.15, 0.15),
           },
           {
             "step": 8000 * 24,
             "lin_vel_x": (-0.4, 0.8),
+            "lin_vel_y": (-0.25, 0.25),
             "ang_vel_z": (-0.35, 0.35),
           },
           {
             "step": 15000 * 24,
             "lin_vel_x": (-0.8, 1.2),
+            "lin_vel_y": (-0.40, 0.40),
             "ang_vel_z": (-0.5, 0.5),
           },
         ],

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 from mjlab.entity import Entity
+from mjlab.envs.mdp.terminations import nan_detection
 from pal_mjlab.robots.pal_talos.talos_constants import (
   GRASPING_INIT_STATE,
   INIT_STATE,
@@ -252,11 +253,19 @@ def test_contact_grasp_task_uses_deployable_actor_and_staged_commands() -> None:
   assert cfg.rewards["tray_grasp_slip"].weight > 0
   assert "tray_grasp_lost" in cfg.terminations
   assert cfg.terminations["tray_grasp_lost"].params["grace_period_s"] >= 0.48
+  assert cfg.terminations["nan_state"].func is nan_detection
+  for group_name in ("actor", "critic"):
+    assert cfg.observations[group_name].nan_policy == "sanitize"
+    assert not cfg.observations[group_name].nan_check_per_term
 
   stages = cfg.curriculum["command_vel"].params["velocity_stages"]
   assert stages[0]["lin_vel_x"] == (0.0, 0.0)
+  assert stages[0]["lin_vel_y"] == (0.0, 0.0)
+  assert stages[0]["ang_vel_z"] == (0.0, 0.0)
   assert stages[1]["lin_vel_x"][1] > 0.0
+  assert stages[1]["lin_vel_y"][1] > 0.0
   assert stages[-1]["lin_vel_x"][1] > stages[1]["lin_vel_x"][1]
+  assert stages[-1]["lin_vel_y"][1] > stages[1]["lin_vel_y"][1]
 
   randomized = pal_talos_grasping_tray_flat_env_cfg(randomize_payload_mass=True)
   assert "payload_inertia" in randomized.events
