@@ -114,6 +114,29 @@ def test_talos_has_four_force_torque_measurement_sites() -> None:
     assert model.site_bodyid[site_id] == model.body(body_name).id
 
 
+@pytest.mark.parametrize(
+  ("body_name", "collision_name", "source_mesh_name"),
+  (
+    ("head_1_link", "head_1_collision", "head_1"),
+    ("head_2_link", "head_2_collision", "head_2_default"),
+    ("head_2_link", "orbbec_collision", "orbbec"),
+  ),
+)
+def test_head_collisions_reuse_the_original_visual_meshes(
+  body_name: str,
+  collision_name: str,
+  source_mesh_name: str,
+) -> None:
+  model = get_spec().compile()
+  geom = model.geom(collision_name)
+
+  assert geom.type == mujoco.mjtGeom.mjGEOM_MESH
+  assert model.geom_bodyid[geom.id] == model.body(body_name).id
+  assert model.geom_dataid[geom.id] == model.mesh(source_mesh_name).id
+  assert model.geom_contype[geom.id] != 0
+  assert model.geom_conaffinity[geom.id] != 0
+
+
 def test_right_wrist_weld_is_aligned_at_initial_state() -> None:
   model = get_tray_spec().compile()
   data = mujoco.MjData(model)
