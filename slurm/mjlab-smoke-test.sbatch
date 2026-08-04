@@ -41,7 +41,9 @@ MUJOCO_GL=disable FORCE_CPU=1 "${PYTHON}" -m pytest -q
 for TASK in \
   Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Critic \
   Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Estimator \
-  Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Oracle
+  Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Oracle \
+  Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp \
+  Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp-Random-Mass
 do
   TASK_SLUG="${TASK##*-}"
   "${PYTHON}" -m mjlab.scripts.train \

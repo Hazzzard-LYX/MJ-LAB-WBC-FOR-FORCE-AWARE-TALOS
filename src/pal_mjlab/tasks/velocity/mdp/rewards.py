@@ -7,6 +7,7 @@ import torch
 from mjlab.entity import Entity
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.sensor.contact_sensor import ContactSensor
 from mjlab.utils.lab_api.math import quat_apply_inverse
 from mjlab.utils.lab_api.string import (
@@ -17,6 +18,8 @@ from .observations import (
   force_torque_wrenches_w,
   payload_pos_t,
   payload_relative_velocity_t,
+  tray_handle_offsets_w,
+  tray_handle_relative_velocity_w,
   tray_projected_gravity,
 )
 
@@ -314,6 +317,110 @@ def payload_dropped(
     | (torch.abs(position_t[:, 0]) > max_abs_x_t)
     | (torch.abs(position_t[:, 1]) > max_abs_y_t)
   )
+
+
+def bilateral_gripper_contact_reward(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  contacts_per_hand: int = 2,
+) -> torch.Tensor:
+  """Reward simultaneous multi-finger contact on both tray handles."""
+  sensor = env.scene[sensor_name]
+  if not isinstance(sensor, ContactSensor) or sensor.data.found is None:
+    raise TypeError(f"'{sensor_name}' must be a ContactSensor with found data.")
+
+  found = sensor.data.found > 0
+  names = sensor.primary_names
+  left_ids = [i for i, name in enumerate(names) if "_left_" in name]
+  right_ids = [i for i, name in enumerate(names) if "_right_" in name]
+  if not left_ids or not right_ids:
+    raise ValueError("Expected contact primaries for both TALOS grippers.")
+
+  left_fraction = found[:, left_ids].float().sum(dim=1) / contacts_per_hand
+  right_fraction = found[:, right_ids].float().sum(dim=1) / contacts_per_hand
+  bilateral = torch.minimum(left_fraction, right_fraction).clamp(max=1.0)
+  env.extras["log"]["Metrics/left_gripper_contacts"] = (
+    found[:, left_ids].float().sum(dim=1).mean()
+  )
+  env.extras["log"]["Metrics/right_gripper_contacts"] = (
+    found[:, right_ids].float().sum(dim=1).mean()
+  )
+  return bilateral
+
+
+def tray_grasp_pose_reward(
+  env: ManagerBasedRlEnv,
+  std: float,
+  grasp_site_cfg: SceneEntityCfg,
+  handle_site_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Reward keeping both handle centers aligned with the wrist grasp centers."""
+  offsets = tray_handle_offsets_w(env, grasp_site_cfg, handle_site_cfg).reshape(
+    env.num_envs, 2, 3
+  )
+  error_sq = torch.sum(torch.square(offsets), dim=(1, 2))
+  error = torch.sqrt(error_sq / 2.0)
+  env.extras["log"]["Metrics/tray_grasp_position_error_m"] = error.mean()
+  return torch.exp(-error_sq / std**2)
+
+
+def tray_grasp_slip_reward(
+  env: ManagerBasedRlEnv,
+  std: float,
+  grasp_site_cfg: SceneEntityCfg,
+  handle_site_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Reward low handle velocity relative to both grasp centers."""
+  relative_velocity = tray_handle_relative_velocity_w(
+    env, grasp_site_cfg, handle_site_cfg
+  ).reshape(env.num_envs, 2, 3)
+  speed_sq = torch.sum(torch.square(relative_velocity), dim=(1, 2))
+  env.extras["log"]["Metrics/tray_grasp_relative_speed_mps"] = torch.sqrt(
+    speed_sq / 2.0
+  ).mean()
+  return torch.exp(-speed_sq / std**2)
+
+
+class tray_grasp_lost:
+  """Terminate after the free tray has left either hand's reachable grasp area.
+
+  A short grace period prevents the initial high-variance policy from turning
+  every first rollout into an almost immediate terminal transition.  Grasp
+  rewards remain active during this interval, so the policy still receives a
+  dense signal for restoring bilateral contact.  This keeps its own per-env
+  clock because RSL-RL deliberately randomizes ``episode_length_buf`` when
+  training starts.
+  """
+
+  def __init__(self, cfg: TerminationTermCfg, env: ManagerBasedRlEnv):
+    del cfg
+    self._elapsed_s = torch.zeros(env.num_envs, device=env.device, dtype=torch.float32)
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    if env_ids is None:
+      env_ids = slice(None)
+    self._elapsed_s[env_ids] = 0.0
+
+  def __call__(
+    self,
+    env: ManagerBasedRlEnv,
+    max_handle_error: float,
+    min_tray_height: float,
+    grace_period_s: float,
+    grasp_site_cfg: SceneEntityCfg,
+    handle_site_cfg: SceneEntityCfg,
+    tray_cfg: SceneEntityCfg,
+  ) -> torch.Tensor:
+    self._elapsed_s += env.step_dt
+    offsets = tray_handle_offsets_w(env, grasp_site_cfg, handle_site_cfg).reshape(
+      env.num_envs, 2, 3
+    )
+    handle_error = torch.linalg.vector_norm(offsets, dim=-1).max(dim=1).values
+    tray: Entity = env.scene[tray_cfg.name]
+    tray_body_id = _single_body_id_for_reward(tray, tray_cfg)
+    tray_height = tray.data.body_link_pos_w[:, tray_body_id, 2]
+    lost = (handle_error > max_handle_error) | (tray_height < min_tray_height)
+    return lost & (self._elapsed_s >= grace_period_s)
 
 
 def torso_height(

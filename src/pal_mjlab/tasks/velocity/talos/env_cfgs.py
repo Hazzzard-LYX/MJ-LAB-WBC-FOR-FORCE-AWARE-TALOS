@@ -8,6 +8,7 @@ import torch
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp import dr
 from mjlab.envs.mdp.actions import JointPositionActionCfg
+from mjlab.managers.curriculum_manager import CurriculumTermCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
@@ -29,12 +30,16 @@ from mjlab.utils.noise import UniformNoiseCfg as Unoise
 from pal_mjlab.robots import (
   TALOS_ACTION_SCALE,
   TALOS_FT_SITE_NAMES,
+  TALOS_GRASPING_ACTION_SCALE,
+  TALOS_GRIPPER_CONTACT_BODY_NAMES,
   TALOS_PAYLOAD_BODY_NAME,
   TALOS_TORQUE_SENSOR_JOINT_NAMES,
   TALOS_TRAY_BODY_NAME,
   TALOS_TRAY_PAYLOAD_BODY_NAME,
   TALOS_WRIST_FT_SITE_NAMES,
+  get_talos_free_hand_tray_cfg,
   get_talos_free_tray_payload_cfg,
+  get_talos_grasping_robot_cfg,
   get_talos_payload_robot_cfg,
   get_talos_robot_cfg,
   get_talos_tray_robot_cfg,
@@ -706,4 +711,271 @@ def pal_talos_oracle_mass_tray_flat_env_cfg(
     clip=TALOS_TRAY_PAYLOAD_MASS_RANGE,
     scale=1.0 / TALOS_TRAY_PAYLOAD_MASS_RANGE[1],
   )
+  return cfg
+
+
+def pal_talos_grasping_tray_flat_env_cfg(
+  play: bool = False,
+  randomize_payload_mass: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Learn contact-based tray grasping and velocity tracking.
+
+  Unlike the legacy tray task, the tray is a separate free body and neither
+  wrist is welded to it.  The actor receives only deployable robot channels;
+  tray pose, slip, contacts, and payload state are privileged training signals.
+  """
+  cfg = pal_talos_free_payload_tray_flat_env_cfg(play=play)
+  cfg.scene.entities["robot"] = get_talos_grasping_robot_cfg()
+  cfg.scene.entities["tray"] = get_talos_free_hand_tray_cfg()
+
+  tray_cfg = SceneEntityCfg("tray", body_names=(TALOS_TRAY_BODY_NAME,))
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  grasp_site_cfg = SceneEntityCfg(
+    "robot",
+    site_names=("left_grasp_center", "right_grasp_center"),
+    preserve_order=True,
+  )
+  handle_site_cfg = SceneEntityCfg(
+    "tray",
+    site_names=(
+      "hand_tray_left_handle_grasp",
+      "hand_tray_right_handle_grasp",
+    ),
+    preserve_order=True,
+  )
+
+  # Repoint inherited transport terms from the old robot-attached tray to the
+  # independent tray entity.
+  for term_name in (
+    "payload_pos_t",
+    "payload_relative_velocity_t",
+  ):
+    cfg.observations["critic"].terms[term_name].params["tray_cfg"] = tray_cfg
+  for reward_name in (
+    "tray_level",
+    "payload_position_on_tray",
+    "payload_relative_motion",
+    "tray_tipping_moment",
+  ):
+    cfg.rewards[reward_name].params["tray_cfg"] = tray_cfg
+  cfg.terminations["payload_dropped"].params["tray_cfg"] = tray_cfg
+
+  cfg.events["reset_free_tray"] = EventTermCfg(
+    mode="reset",
+    func=mdp.reset_root_state_uniform,
+    params={
+      "asset_cfg": tray_cfg,
+      "pose_range": {},
+      "velocity_range": {},
+    },
+  )
+  cfg.events["gripper_overgrip_friction"] = EventTermCfg(
+    mode="startup",
+    func=dr.geom_friction,
+    params={
+      "asset_cfg": SceneEntityCfg("robot", geom_names=(".*_grasp_collision",)),
+      "operation": "abs",
+      "ranges": (1.0, 2.0),
+      "shared_random": True,
+    },
+  )
+  cfg.events["tray_overgrip_friction"] = EventTermCfg(
+    mode="startup",
+    func=dr.geom_friction,
+    params={
+      "asset_cfg": SceneEntityCfg(
+        "tray", geom_names=("hand_tray_.*_handle_collision",)
+      ),
+      "operation": "abs",
+      "ranges": (1.0, 2.0),
+      "shared_random": True,
+    },
+  )
+  if randomize_payload_mass:
+    cfg.events["payload_inertia"] = EventTermCfg(
+      mode="startup",
+      func=dr.pseudo_inertia,
+      params={
+        "asset_cfg": payload_cfg,
+        "alpha_range": TALOS_TRAY_PAYLOAD_ALPHA_RANGE,
+        "distribution": TALOS_UNIFORM_MASS_DISTRIBUTION,
+      },
+    )
+
+  grasp_contact_cfg = ContactSensorCfg(
+    name="gripper_tray_contact",
+    primary=ContactMatch(
+      mode="body",
+      pattern=TALOS_GRIPPER_CONTACT_BODY_NAMES,
+      entity="robot",
+    ),
+    secondary=ContactMatch(
+      mode="body",
+      pattern=TALOS_TRAY_BODY_NAME,
+      entity="tray",
+    ),
+    fields=("found", "force"),
+    reduce="netforce",
+    num_slots=1,
+    history_length=cfg.decimation,
+  )
+  cfg.scene.sensors = (*cfg.scene.sensors, grasp_contact_cfg)
+
+  # Do not expose passive distal-link coordinates or simulated tray state to
+  # the actor.  The commanded main gripper encoders are available on hardware.
+  deployable_joint_cfg = SceneEntityCfg(
+    "robot",
+    joint_names=(
+      "arm_.*_joint",
+      "leg_.*_joint",
+      "head_.*_joint",
+      "torso_.*_joint",
+      "gripper_(left|right)_joint",
+    ),
+    preserve_order=True,
+  )
+  locomotion_joint_cfg = SceneEntityCfg(
+    "robot",
+    joint_names=(
+      "arm_.*_joint",
+      "leg_.*_joint",
+      "head_.*_joint",
+      "torso_.*_joint",
+    ),
+    preserve_order=True,
+  )
+  for group_name in ("actor", "critic"):
+    for term_name in ("joint_pos", "joint_vel"):
+      cfg.observations[group_name].terms[term_name].params["asset_cfg"] = (
+        deployable_joint_cfg
+      )
+  cfg.rewards["pose"].params["asset_cfg"] = locomotion_joint_cfg
+  cfg.events["reset_robot_joints"].params["asset_cfg"] = locomotion_joint_cfg
+  cfg.events["reset_gripper_joints"] = EventTermCfg(
+    mode="reset",
+    func=mdp.reset_joints_by_offset,
+    params={
+      "position_range": (0.0, 0.0),
+      "velocity_range": (0.0, 0.0),
+      "asset_cfg": SceneEntityCfg("robot", joint_names=("gripper_.*_joint",)),
+    },
+  )
+
+  cfg.observations["critic"].terms.update(
+    {
+      "tray_handle_offsets_w": ObservationTermCfg(
+        func=pal_mdp.tray_handle_offsets_w,
+        params={
+          "grasp_site_cfg": grasp_site_cfg,
+          "handle_site_cfg": handle_site_cfg,
+        },
+        clip=(-0.5, 0.5),
+      ),
+      "tray_handle_relative_velocity_w": ObservationTermCfg(
+        func=pal_mdp.tray_handle_relative_velocity_w,
+        params={
+          "grasp_site_cfg": grasp_site_cfg,
+          "handle_site_cfg": handle_site_cfg,
+        },
+        clip=(-5.0, 5.0),
+      ),
+      "tray_projected_gravity": ObservationTermCfg(
+        func=pal_mdp.tray_projected_gravity,
+        params={"tray_cfg": tray_cfg},
+      ),
+    }
+  )
+
+  cfg.rewards["bilateral_gripper_contact"] = RewardTermCfg(
+    func=pal_mdp.bilateral_gripper_contact_reward,
+    weight=4.0,
+    # The three-finger linkage normally loads two or more collision links per
+    # side around the cylindrical handle; do not require every distal mesh to
+    # touch simultaneously.
+    params={"sensor_name": grasp_contact_cfg.name, "contacts_per_hand": 2},
+  )
+  cfg.rewards["tray_grasp_pose"] = RewardTermCfg(
+    func=pal_mdp.tray_grasp_pose_reward,
+    weight=6.0,
+    params={
+      "std": 0.06,
+      "grasp_site_cfg": grasp_site_cfg,
+      "handle_site_cfg": handle_site_cfg,
+    },
+  )
+  cfg.rewards["tray_grasp_slip"] = RewardTermCfg(
+    func=pal_mdp.tray_grasp_slip_reward,
+    weight=3.0,
+    params={
+      "std": 0.25,
+      "grasp_site_cfg": grasp_site_cfg,
+      "handle_site_cfg": handle_site_cfg,
+    },
+  )
+  cfg.terminations["tray_grasp_lost"] = TerminationTermCfg(
+    func=pal_mdp.tray_grasp_lost,
+    params={
+      "max_handle_error": 0.16,
+      # A low absolute floor catches a truly dropped tray.  Normal lowering of
+      # both loaded arms is handled by posture/height rewards, not mislabeled
+      # as loss of grasp while the handles remain between the fingers.
+      "min_tray_height": 0.30,
+      # One PPO rollout is 0.48 s.  Keep at least one complete rollout of dense
+      # grasp feedback before failed exploratory actions can end the episode.
+      "grace_period_s": 0.75,
+      "grasp_site_cfg": grasp_site_cfg,
+      "handle_site_cfg": handle_site_cfg,
+      "tray_cfg": tray_cfg,
+    },
+  )
+  # Contact-rich gripper exploration can occasionally drive one batched world
+  # into a non-finite MuJoCo state.  Reset only that world before corrupted
+  # physics reaches the next policy observation.  RewardManager sanitizes the
+  # terminal-step reward, and the observation policy below is a final backstop
+  # for derived sensor channels.
+  cfg.terminations["nan_state"] = TerminationTermCfg(func=mdp.nan_detection)
+  for group_name in ("actor", "critic"):
+    cfg.observations[group_name].nan_policy = "sanitize"
+    cfg.observations[group_name].nan_check_per_term = False
+
+  joint_pos_action = cfg.actions["joint_pos"]
+  assert isinstance(joint_pos_action, JointPositionActionCfg)
+  joint_pos_action.scale = TALOS_GRASPING_ACTION_SCALE
+
+  # Phase 1 establishes a bilateral grasp while standing; later stages add
+  # walking and turning without removing the grasp-related learning signal.
+  if not play:
+    assert cfg.curriculum is not None
+    cfg.curriculum["command_vel"] = CurriculumTermCfg(
+      func=mdp.commands_vel,
+      params={
+        "command_name": "twist",
+        "velocity_stages": [
+          {
+            "step": 0,
+            "lin_vel_x": (0.0, 0.0),
+            "lin_vel_y": (0.0, 0.0),
+            "ang_vel_z": (0.0, 0.0),
+          },
+          {
+            "step": 3000 * 24,
+            "lin_vel_x": (-0.15, 0.35),
+            "lin_vel_y": (-0.10, 0.10),
+            "ang_vel_z": (-0.15, 0.15),
+          },
+          {
+            "step": 8000 * 24,
+            "lin_vel_x": (-0.4, 0.8),
+            "lin_vel_y": (-0.25, 0.25),
+            "ang_vel_z": (-0.35, 0.35),
+          },
+          {
+            "step": 15000 * 24,
+            "lin_vel_x": (-0.8, 1.2),
+            "lin_vel_y": (-0.40, 0.40),
+            "ang_vel_z": (-0.5, 0.5),
+          },
+        ],
+      },
+    )
   return cfg

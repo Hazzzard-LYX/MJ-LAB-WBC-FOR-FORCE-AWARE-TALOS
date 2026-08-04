@@ -14,6 +14,7 @@ from pal_mjlab import PAL_MJLAB_SRC_PATH
 
 TALOS_XML: Path = PAL_MJLAB_SRC_PATH / "robots" / "pal_talos" / "xmls" / "talos.xml"
 assert TALOS_XML.exists()
+TALOS_GRIPPER_ASSET_DIR = TALOS_XML.parent / "assets" / "gripper"
 
 TALOS_PAYLOAD_BODY_NAME = "front_payload"
 TALOS_PAYLOAD_GEOM_NAME = "front_payload_collision"
@@ -36,6 +37,39 @@ TALOS_TRAY_PAYLOAD_GEOM_NAME = "tray_payload_collision"
 TALOS_TRAY_PAYLOAD_MASS = 2.5
 TALOS_TRAY_PAYLOAD_HALF_SIZE = (0.12, 0.12, 0.12)
 TALOS_TRAY_PAYLOAD_INIT_POS = (0.43, 0.0, 1.2275)
+TALOS_FREE_TRAY_INIT_POS = (0.43, 0.0, 1.09)
+TALOS_FREE_TRAY_JOINT_NAME = "hand_tray_freejoint"
+
+# Provisional rigid-contact model for badminton overgrip tape.  This is an
+# intentionally exposed calibration parameter, not a claim that every tape has
+# the same coefficient.  Training randomizes around it in the grasping task.
+TALOS_OVERGRIP_FRICTION = (1.5, 0.02, 0.001)
+
+TALOS_GRIPPER_MAIN_JOINT_NAMES = (
+  "gripper_left_joint",
+  "gripper_right_joint",
+)
+TALOS_GRIPPER_FINGERTIP_BODY_NAMES = (
+  "gripper_left_fingertip_1_link",
+  "gripper_left_fingertip_2_link",
+  "gripper_left_fingertip_3_link",
+  "gripper_right_fingertip_1_link",
+  "gripper_right_fingertip_2_link",
+  "gripper_right_fingertip_3_link",
+)
+TALOS_GRIPPER_CONTACT_BODY_NAMES = tuple(
+  f"gripper_{side}_{link}_link"
+  for side in ("left", "right")
+  for link in (
+    "motor_double",
+    "inner_double",
+    "fingertip_1",
+    "fingertip_2",
+    "motor_single",
+    "inner_single",
+    "fingertip_3",
+  )
+)
 
 # TALOS exposes four six-axis force/torque sensors: one at each wrist and
 # ankle.  The MuJoCo sites are placed on the child side of each physical
@@ -127,6 +161,253 @@ def get_spec() -> mujoco.MjSpec:
   return spec
 
 
+def _add_gripper_articulation(spec: mujoco.MjSpec) -> None:
+  """Restore the coupled TALOS three-finger grippers for contact tasks.
+
+  The source MJCF keeps these joints and collision meshes disabled so legacy
+  locomotion checkpoints retain their original dimensions.  This task-local
+  augmentation follows the PAL URDF transmission: one actuated joint per hand
+  and six mimic joints (three linkage joints and three fingertip joints).
+  """
+  collision_meshes = {
+    "gripper_motor_double_collision": "gripper_motor_double_collision.stl",
+    "gripper_motor_single_collision": "gripper_motor_single_collision.stl",
+    "inner_double_collision": "inner_double_collision.stl",
+    "inner_single_collision": "inner_single_collision.stl",
+    "fingertip_collision": "fingertip_collision.stl",
+  }
+  for mesh_name, filename in collision_meshes.items():
+    mesh_path = TALOS_GRIPPER_ASSET_DIR / filename
+    if not mesh_path.exists():
+      raise FileNotFoundError(f"Missing TALOS gripper collision mesh: {mesh_path}")
+    spec.add_mesh(name=mesh_name, file=str(mesh_path))
+
+  joint_specs = (
+    ("gripper_left_motor_double_link", "gripper_left_joint", (-0.959931, 0.0)),
+    (
+      "gripper_left_inner_double_link",
+      "gripper_left_inner_double_joint",
+      (-1.0472, 0.0),
+    ),
+    (
+      "gripper_left_motor_single_link",
+      "gripper_left_motor_single_joint",
+      (0.0, 1.0472),
+    ),
+    (
+      "gripper_left_inner_single_link",
+      "gripper_left_inner_single_joint",
+      (0.0, 1.0472),
+    ),
+    ("gripper_left_fingertip_1_link", "gripper_left_fingertip_1_joint", (0.0, 1.0472)),
+    ("gripper_left_fingertip_2_link", "gripper_left_fingertip_2_joint", (0.0, 1.0472)),
+    ("gripper_left_fingertip_3_link", "gripper_left_fingertip_3_joint", (0.0, 1.0472)),
+    ("gripper_right_motor_double_link", "gripper_right_joint", (-0.959931, 0.0)),
+    (
+      "gripper_right_inner_double_link",
+      "gripper_right_inner_double_joint",
+      (-1.0472, 0.0),
+    ),
+    (
+      "gripper_right_motor_single_link",
+      "gripper_right_motor_single_joint",
+      (0.0, 1.0472),
+    ),
+    (
+      "gripper_right_inner_single_link",
+      "gripper_right_inner_single_joint",
+      (0.0, 1.0472),
+    ),
+    (
+      "gripper_right_fingertip_1_link",
+      "gripper_right_fingertip_1_joint",
+      (0.0, 1.0472),
+    ),
+    (
+      "gripper_right_fingertip_2_link",
+      "gripper_right_fingertip_2_joint",
+      (0.0, 1.0472),
+    ),
+    (
+      "gripper_right_fingertip_3_link",
+      "gripper_right_fingertip_3_joint",
+      (0.0, 1.0472),
+    ),
+  )
+  for body_name, joint_name, joint_range in joint_specs:
+    body = spec.body(body_name)
+    if body is None:
+      raise ValueError(f"TALOS gripper body '{body_name}' was not found.")
+    body.add_joint(
+      name=joint_name,
+      axis=(1.0, 0.0, 0.0),
+      limited=True,
+      range=joint_range,
+      damping=1.0,
+      frictionloss=1.0,
+    )
+
+  collision_geoms = (
+    (
+      "gripper_left_motor_double_link",
+      "left_motor_double_grasp_collision",
+      "gripper_motor_double_collision",
+    ),
+    (
+      "gripper_left_inner_double_link",
+      "left_inner_double_grasp_collision",
+      "inner_double_collision",
+    ),
+    (
+      "gripper_left_motor_single_link",
+      "left_motor_single_grasp_collision",
+      "gripper_motor_single_collision",
+    ),
+    (
+      "gripper_left_inner_single_link",
+      "left_inner_single_grasp_collision",
+      "inner_single_collision",
+    ),
+    (
+      "gripper_left_fingertip_1_link",
+      "left_fingertip_1_grasp_collision",
+      "fingertip_collision",
+    ),
+    (
+      "gripper_left_fingertip_2_link",
+      "left_fingertip_2_grasp_collision",
+      "fingertip_collision",
+    ),
+    (
+      "gripper_left_fingertip_3_link",
+      "left_fingertip_3_grasp_collision",
+      "fingertip_collision",
+    ),
+    (
+      "gripper_right_motor_double_link",
+      "right_motor_double_grasp_collision",
+      "gripper_motor_double_collision",
+    ),
+    (
+      "gripper_right_inner_double_link",
+      "right_inner_double_grasp_collision",
+      "inner_double_collision",
+    ),
+    (
+      "gripper_right_motor_single_link",
+      "right_motor_single_grasp_collision",
+      "gripper_motor_single_collision",
+    ),
+    (
+      "gripper_right_inner_single_link",
+      "right_inner_single_grasp_collision",
+      "inner_single_collision",
+    ),
+    (
+      "gripper_right_fingertip_1_link",
+      "right_fingertip_1_grasp_collision",
+      "fingertip_collision",
+    ),
+    (
+      "gripper_right_fingertip_2_link",
+      "right_fingertip_2_grasp_collision",
+      "fingertip_collision",
+    ),
+    (
+      "gripper_right_fingertip_3_link",
+      "right_fingertip_3_grasp_collision",
+      "fingertip_collision",
+    ),
+  )
+  for body_name, geom_name, mesh_name in collision_geoms:
+    spec.body(body_name).add_geom(
+      name=geom_name,
+      type=mujoco.mjtGeom.mjGEOM_MESH,
+      meshname=mesh_name,
+      condim=4,
+      priority=2,
+      friction=TALOS_OVERGRIP_FRICTION,
+    )
+
+  # Equality direction and signs reproduce the source model's mechanical
+  # linkage.  The initial converted MJCF omitted the fingertip mimic entries;
+  # PAL's URDF specifies all three fingertip joints as -1 times the main joint.
+  for side in ("left", "right"):
+    couplings = (
+      (f"gripper_{side}_motor_single_joint", f"gripper_{side}_joint", -1.0),
+      (f"gripper_{side}_joint", f"gripper_{side}_inner_double_joint", 1.0),
+      (
+        f"gripper_{side}_inner_single_joint",
+        f"gripper_{side}_inner_double_joint",
+        -1.0,
+      ),
+      (
+        f"gripper_{side}_fingertip_1_joint",
+        f"gripper_{side}_joint",
+        -1.0,
+      ),
+      (
+        f"gripper_{side}_fingertip_2_joint",
+        f"gripper_{side}_joint",
+        -1.0,
+      ),
+      (
+        f"gripper_{side}_fingertip_3_joint",
+        f"gripper_{side}_joint",
+        -1.0,
+      ),
+    )
+    for joint1, joint2, ratio in couplings:
+      spec.add_equality(
+        name=f"{joint1}_coupling",
+        type=mujoco.mjtEq.mjEQ_JOINT,
+        objtype=mujoco.mjtObj.mjOBJ_JOINT,
+        name1=joint1,
+        name2=joint2,
+        data=(0.0, ratio, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        solref=(0.01, 1.0),
+      )
+
+  # Adjacent links in each gripper are mechanically connected and should not
+  # create self-contact constraints.  Contacts with the tray remain enabled.
+  local_excludes = (
+    ("arm_{side}_7_link", "gripper_{side}_motor_double_link"),
+    ("arm_{side}_7_link", "gripper_{side}_inner_double_link"),
+    ("arm_{side}_7_link", "gripper_{side}_motor_single_link"),
+    ("arm_{side}_7_link", "gripper_{side}_inner_single_link"),
+    ("gripper_{side}_motor_double_link", "gripper_{side}_inner_double_link"),
+    ("gripper_{side}_motor_double_link", "gripper_{side}_fingertip_2_link"),
+    ("gripper_{side}_motor_double_link", "gripper_{side}_motor_single_link"),
+    ("gripper_{side}_motor_double_link", "gripper_{side}_inner_single_link"),
+    ("gripper_{side}_inner_double_link", "gripper_{side}_motor_single_link"),
+    ("gripper_{side}_fingertip_1_link", "gripper_{side}_fingertip_2_link"),
+    ("gripper_{side}_fingertip_1_link", "gripper_{side}_fingertip_3_link"),
+    ("gripper_{side}_fingertip_2_link", "gripper_{side}_fingertip_3_link"),
+    ("gripper_{side}_motor_single_link", "gripper_{side}_inner_single_link"),
+    ("gripper_{side}_motor_single_link", "gripper_{side}_fingertip_3_link"),
+  )
+  for side in ("left", "right"):
+    for index, (body1, body2) in enumerate(local_excludes):
+      spec.add_exclude(
+        name=f"gripper_{side}_self_{index}",
+        bodyname1=body1.format(side=side),
+        bodyname2=body2.format(side=side),
+      )
+
+
+def get_grasping_spec() -> mujoco.MjSpec:
+  """Return TALOS with articulated, collision-enabled coupled grippers."""
+  spec = get_spec()
+  _add_gripper_articulation(spec)
+  for side in ("left", "right"):
+    spec.body(f"arm_{side}_7_link").add_site(
+      name=f"{side}_grasp_center",
+      pos=TALOS_TRAY_GRASP_POS_WRIST,
+      size=(0.008,),
+    )
+  return spec
+
+
 def get_payload_spec() -> mujoco.MjSpec:
   """Return TALOS with a rigid cube payload fixed in front of its torso.
 
@@ -156,25 +437,8 @@ def get_payload_spec() -> mujoco.MjSpec:
   return spec
 
 
-def get_tray_spec() -> mujoco.MjSpec:
-  """Return TALOS rigidly carrying an empty tray with both wrists.
-
-  MuJoCo bodies can only have one structural parent.  The tray is therefore a
-  fixed child of the left wrist, while a site-based weld connects it to the
-  right wrist.  This creates a closed kinematic chain and distributes tray
-  forces through both arms without introducing another degree of freedom.
-  """
-  spec = get_spec()
-  left_wrist = spec.body(TALOS_TRAY_PARENT_BODY_NAME)
-  right_wrist = spec.body(TALOS_TRAY_SECONDARY_BODY_NAME)
-  if left_wrist is None or right_wrist is None:
-    raise ValueError("TALOS wrist bodies required for the hand tray were not found.")
-
-  tray = left_wrist.add_body(
-    name=TALOS_TRAY_BODY_NAME,
-    pos=TALOS_TRAY_POS_LEFT_WRIST,
-    quat=TALOS_TRAY_QUAT_LEFT_WRIST,
-  )
+def _add_tray_geometry(tray: mujoco.MjsBody) -> None:
+  """Add the common rigid tray geometry to ``tray``."""
   tray.add_geom(
     name="hand_tray_base_collision",
     type=mujoco.mjtGeom.mjGEOM_BOX,
@@ -209,8 +473,40 @@ def get_tray_spec() -> mujoco.MjSpec:
       size=(0.025, 0.11),
       mass=0.3,
       rgba=(0.12, 0.12, 0.14, 1.0),
-      friction=(1.2, 0.02, 0.001),
+      condim=4,
+      priority=2,
+      friction=TALOS_OVERGRIP_FRICTION,
     )
+
+  for side, handle_pos in TALOS_TRAY_HANDLE_POSITIONS.items():
+    grasp_y = handle_pos[1]
+    tray.add_site(
+      name=f"hand_tray_{side}_handle_grasp",
+      pos=(TALOS_TRAY_RIGHT_MOUNT_POS[0], grasp_y, TALOS_TRAY_RIGHT_MOUNT_POS[2]),
+      size=(0.008,),
+    )
+
+
+def get_tray_spec() -> mujoco.MjSpec:
+  """Return TALOS rigidly carrying an empty tray with both wrists.
+
+  MuJoCo bodies can only have one structural parent.  The tray is therefore a
+  fixed child of the left wrist, while a site-based weld connects it to the
+  right wrist.  This creates a closed kinematic chain and distributes tray
+  forces through both arms without introducing another degree of freedom.
+  """
+  spec = get_spec()
+  left_wrist = spec.body(TALOS_TRAY_PARENT_BODY_NAME)
+  right_wrist = spec.body(TALOS_TRAY_SECONDARY_BODY_NAME)
+  if left_wrist is None or right_wrist is None:
+    raise ValueError("TALOS wrist bodies required for the hand tray were not found.")
+
+  tray = left_wrist.add_body(
+    name=TALOS_TRAY_BODY_NAME,
+    pos=TALOS_TRAY_POS_LEFT_WRIST,
+    quat=TALOS_TRAY_QUAT_LEFT_WRIST,
+  )
+  _add_tray_geometry(tray)
 
   tray.add_site(
     name=TALOS_TRAY_RIGHT_MOUNT_SITE_NAME,
@@ -240,6 +536,15 @@ def get_tray_spec() -> mujoco.MjSpec:
       bodyname1=TALOS_TRAY_BODY_NAME,
       bodyname2=gripper_body_name,
     )
+  return spec
+
+
+def get_free_hand_tray_spec() -> mujoco.MjSpec:
+  """Return the hand tray as an independent six-DoF rigid entity."""
+  spec = mujoco.MjSpec()
+  tray = spec.worldbody.add_body(name=TALOS_TRAY_BODY_NAME)
+  tray.add_freejoint(name=TALOS_FREE_TRAY_JOINT_NAME)
+  _add_tray_geometry(tray)
   return spec
 
 
@@ -464,6 +769,17 @@ LEG_6_ACTUATOR_CFG = BuiltinPositionActuatorCfg(
   damping=LEG_6_DAMPING,
 )
 
+# TALOS exposes one commanded gripper degree of freedom per hand.  The
+# remaining linkage joints are constrained in ``get_grasping_spec`` and the
+# distal fingertip joints are passive.  Parameters match the position actuator
+# retained in the project's initial MJCF.
+GRIPPER_ACTUATOR_CFG = BuiltinPositionActuatorCfg(
+  target_names_expr=TALOS_GRIPPER_MAIN_JOINT_NAMES,
+  effort_limit=10.0,
+  stiffness=1000.0,
+  damping=0.895504,
+)
+
 ##
 # Keyframes.
 ##
@@ -500,6 +816,25 @@ INIT_STATE = EntityCfg.InitialStateCfg(
   joint_vel={".*": 0.0},
 )
 
+GRASPING_INIT_STATE = EntityCfg.InitialStateCfg(
+  pos=INIT_STATE.pos,
+  rot=INIT_STATE.rot,
+  lin_vel=INIT_STATE.lin_vel,
+  ang_vel=INIT_STATE.ang_vel,
+  joint_pos={
+    **(INIT_STATE.joint_pos or {}),
+    # Start around a handle instead of asking exploration to discover a grasp
+    # from a fully open hand.  The coupling entries make the keyframe satisfy
+    # the equality constraints at reset.
+    "gripper_.*_inner_double_joint": -0.24,
+    "gripper_.*_motor_single_joint": 0.24,
+    "gripper_.*_inner_single_joint": 0.24,
+    "gripper_.*_fingertip_.*_joint": 0.24,
+    "gripper_(left|right)_joint": -0.24,
+  },
+  joint_vel={".*": 0.0},
+)
+
 ##
 # Collision config.
 ##
@@ -521,6 +856,23 @@ FULL_COLLISION = CollisionCfg(
   priority={_foot_regex: 1},
   friction={_foot_regex: (0.6,)},
 )
+
+GRASPING_COLLISION = CollisionCfg(
+  geom_names_expr=(".*_collision",),
+  condim={
+    _foot_regex: 3,
+    ".*_grasp_collision": 4,
+    ".*_collision": 1,
+  },
+  priority={
+    _foot_regex: 1,
+    ".*_grasp_collision": 2,
+  },
+  friction={
+    _foot_regex: (0.6,),
+    ".*_grasp_collision": TALOS_OVERGRIP_FRICTION,
+  },
+)
 ##
 # Final config.
 ##
@@ -540,6 +892,11 @@ TALOS_ARTICULATION = EntityArticulationInfoCfg(
     HEAD_2_ACTUATOR_CFG,
     TORSO_ACTUATOR_CFG,
   ),
+  soft_joint_pos_limit_factor=0.9,
+)
+
+TALOS_GRASPING_ARTICULATION = EntityArticulationInfoCfg(
+  actuators=(*TALOS_ARTICULATION.actuators, GRIPPER_ACTUATOR_CFG),
   soft_joint_pos_limit_factor=0.9,
 )
 
@@ -578,6 +935,35 @@ def get_talos_tray_robot_cfg() -> EntityCfg:
   )
 
 
+def get_talos_grasping_robot_cfg() -> EntityCfg:
+  """Get TALOS with coupled, actuated grippers and restored contact meshes."""
+  return EntityCfg(
+    init_state=GRASPING_INIT_STATE,
+    collisions=(GRASPING_COLLISION,),
+    spec_fn=get_grasping_spec,
+    articulation=TALOS_GRASPING_ARTICULATION,
+  )
+
+
+def get_talos_free_hand_tray_cfg() -> EntityCfg:
+  """Get the independent tray initialized between the two grippers."""
+  return EntityCfg(
+    init_state=EntityCfg.InitialStateCfg(
+      pos=TALOS_FREE_TRAY_INIT_POS,
+      joint_pos={},
+    ),
+    collisions=(
+      CollisionCfg(
+        geom_names_expr=("hand_tray_.*_collision",),
+        condim=4,
+        priority=2,
+        friction=TALOS_OVERGRIP_FRICTION,
+      ),
+    ),
+    spec_fn=get_free_hand_tray_spec,
+  )
+
+
 def get_talos_free_tray_payload_cfg() -> EntityCfg:
   """Get a standalone free payload initialized at the tray center."""
   return EntityCfg(
@@ -604,6 +990,15 @@ for a in TALOS_ARTICULATION.actuators:
   for n in names:
     if n in e and n in s and s[n]:
       TALOS_ACTION_SCALE[n] = 0.25 * e[n] / s[n]
+
+TALOS_GRASPING_ACTION_SCALE = dict(TALOS_ACTION_SCALE)
+# Keep the initially preloaded grasp inside the useful contact range while the
+# policy still has high exploration variance.  The generic effort/stiffness
+# formula would yield only 0.0025 rad; 0.08 rad still permits active force
+# modulation without random first-iteration actions immediately opening the
+# hand or driving the linkage deeply through the handle.
+for joint_name in TALOS_GRIPPER_MAIN_JOINT_NAMES:
+  TALOS_GRASPING_ACTION_SCALE[joint_name] = 0.08
 
 
 if __name__ == "__main__":

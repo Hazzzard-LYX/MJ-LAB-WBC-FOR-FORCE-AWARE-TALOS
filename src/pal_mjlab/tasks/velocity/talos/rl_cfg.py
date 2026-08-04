@@ -144,8 +144,9 @@ def pal_talos_estimated_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   return cfg
 
 
-def pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg(
-) -> RslRlOnPolicyRunnerCfg:
+def pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg() -> (
+  RslRlOnPolicyRunnerCfg
+):
   """Create the estimator runner for the zero-joint-torque ablation."""
   cfg = pal_talos_estimated_mass_tray_ppo_runner_cfg()
   cfg.experiment_name = (
@@ -159,4 +160,20 @@ def pal_talos_oracle_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   """Create the true-mass actor-observation upper-bound runner."""
   cfg = pal_talos_ppo_runner_cfg()
   cfg.experiment_name = "talos_random_mass_tray_oracle_velocity"
+  return cfg
+
+
+def pal_talos_grasping_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create the staged fixed-light-payload contact-grasp runner."""
+  cfg = pal_talos_ppo_runner_cfg()
+  cfg.experiment_name = "talos_contact_grasp_tray_fixed_2p5kg"
+  cfg.max_iterations = 40_000
+  return cfg
+
+
+def pal_talos_grasping_random_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create the 2.5--30 kg continuation runner for a learned grasp."""
+  cfg = pal_talos_ppo_runner_cfg()
+  cfg.experiment_name = "talos_contact_grasp_tray_random_mass"
+  cfg.max_iterations = 40_000
   return cfg

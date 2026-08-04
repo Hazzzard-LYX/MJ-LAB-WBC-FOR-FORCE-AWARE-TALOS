@@ -23,6 +23,10 @@ SEED="${SEED:-42}"
 RUN_NAME="${RUN_NAME:-${SHORT_REVISION}-${NUM_ENVS}env}"
 RUN_ROOT="${WORKSPACE}/logs/mjlab-training/${SHORT_REVISION}/${SLURM_JOB_ID}"
 CACHE_ROOT="${WORKSPACE}/shared/mjlab-cache"
+ENABLE_NAN_GUARD="${ENABLE_NAN_GUARD:-False}"
+NAN_DUMP_DIR="${NAN_DUMP_DIR:-${RUN_ROOT}/nan_dumps}"
+RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-}"
+RESUME_EXPERIMENT_NAME="${RESUME_EXPERIMENT_NAME:-}"
 
 export TMPDIR="${SLURM_TMPDIR:-${WORKSPACE}/tmp/${SLURM_JOB_ID}}"
 export WARP_CACHE_PATH="${CACHE_ROOT}/warp"
@@ -30,7 +34,8 @@ export PYTHONPATH="${PROJECT_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
 mkdir -p \
   "${TMPDIR}" \
   "${RUN_ROOT}" \
-  "${WARP_CACHE_PATH}"
+  "${WARP_CACHE_PATH}" \
+  "${NAN_DUMP_DIR}"
 
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
@@ -41,20 +46,45 @@ echo "Task: ${TASK}"
 echo "Environments: ${NUM_ENVS}"
 echo "Iterations: ${MAX_ITERATIONS}"
 echo "Seed: ${SEED}"
+echo "NaN guard: ${ENABLE_NAN_GUARD}"
 nvidia-smi
 
 test -x "${PYTHON}"
 cd "${PROJECT_ROOT}"
-"${PYTHON}" -m mjlab.scripts.train \
-  "${TASK}" \
-  --env.scene.num-envs "${NUM_ENVS}" \
-  --env.seed "${SEED}" \
-  --agent.seed "${SEED}" \
-  --agent.logger tensorboard \
-  --agent.max-iterations "${MAX_ITERATIONS}" \
-  --agent.save-interval "${SAVE_INTERVAL}" \
-  --agent.run-name "${RUN_NAME}" \
+TRAIN_ARGS=(
+  "${TASK}"
+  --env.scene.num-envs "${NUM_ENVS}"
+  --env.seed "${SEED}"
+  --agent.seed "${SEED}"
+  --agent.logger tensorboard
+  --agent.max-iterations "${MAX_ITERATIONS}"
+  --agent.save-interval "${SAVE_INTERVAL}"
+  --agent.run-name "${RUN_NAME}"
   --log-root "${RUN_ROOT}"
+  --enable-nan-guard "${ENABLE_NAN_GUARD}"
+  --env.sim.nan-guard.output-dir "${NAN_DUMP_DIR}"
+)
+
+if [[ -n "${RESUME_CHECKPOINT}" ]]; then
+  test -f "${RESUME_CHECKPOINT}"
+  if [[ -z "${RESUME_EXPERIMENT_NAME}" ]]; then
+    echo "RESUME_EXPERIMENT_NAME is required with RESUME_CHECKPOINT." >&2
+    exit 2
+  fi
+  RESUME_RUN_NAME="resume_source"
+  RESUME_DIR="${RUN_ROOT}/${RESUME_EXPERIMENT_NAME}/${RESUME_RUN_NAME}"
+  RESUME_NAME="$(basename "${RESUME_CHECKPOINT}")"
+  mkdir -p "${RESUME_DIR}"
+  ln -s "${RESUME_CHECKPOINT}" "${RESUME_DIR}/${RESUME_NAME}"
+  echo "Resume checkpoint: ${RESUME_CHECKPOINT}"
+  TRAIN_ARGS+=(
+    --agent.resume True
+    --agent.load-run "^${RESUME_RUN_NAME}$"
+    --agent.load-checkpoint "^${RESUME_NAME}$"
+  )
+fi
+
+"${PYTHON}" -m mjlab.scripts.train "${TRAIN_ARGS[@]}"
 
 echo "MJLAB_TRAINING_OK"
 echo "End: $(date --iso-8601=seconds)"

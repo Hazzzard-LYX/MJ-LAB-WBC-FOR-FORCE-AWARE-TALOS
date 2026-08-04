@@ -204,6 +204,47 @@ def tray_projected_gravity(
   return quat_apply_inverse(tray_quat_w, tray.data.gravity_vec_w)
 
 
+def tray_handle_offsets_w(
+  env: ManagerBasedRlEnv,
+  grasp_site_cfg: SceneEntityCfg,
+  handle_site_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Vector from each wrist grasp center to its tray handle center in world axes."""
+  robot: Entity = env.scene[grasp_site_cfg.name]
+  tray: Entity = env.scene[handle_site_cfg.name]
+  grasp_ids = _resolved_site_ids(robot, grasp_site_cfg)
+  handle_ids = _resolved_site_ids(tray, handle_site_cfg)
+  if len(grasp_ids) != 2 or len(handle_ids) != 2:
+    raise ValueError("tray_handle_offsets_w requires left/right site pairs.")
+  offsets_w = tray.data.site_pos_w[:, handle_ids] - robot.data.site_pos_w[:, grasp_ids]
+  return offsets_w.reshape(env.num_envs, -1)
+
+
+def tray_handle_relative_velocity_w(
+  env: ManagerBasedRlEnv,
+  grasp_site_cfg: SceneEntityCfg,
+  handle_site_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Tray-handle velocity relative to each wrist grasp center."""
+  robot: Entity = env.scene[grasp_site_cfg.name]
+  tray: Entity = env.scene[handle_site_cfg.name]
+  grasp_ids = _resolved_site_ids(robot, grasp_site_cfg)
+  handle_ids = _resolved_site_ids(tray, handle_site_cfg)
+  if len(grasp_ids) != 2 or len(handle_ids) != 2:
+    raise ValueError("tray_handle_relative_velocity_w requires left/right site pairs.")
+  relative_w = (
+    tray.data.site_lin_vel_w[:, handle_ids] - robot.data.site_lin_vel_w[:, grasp_ids]
+  )
+  return relative_w.reshape(env.num_envs, -1)
+
+
+def _resolved_site_ids(asset: Entity, asset_cfg: SceneEntityCfg) -> list[int]:
+  """Materialize a resolved site slice for entities where all sites were selected."""
+  if isinstance(asset_cfg.site_ids, list):
+    return asset_cfg.site_ids
+  return list(range(asset.num_sites))[asset_cfg.site_ids]
+
+
 def _single_body_id(
   asset: Entity, asset_cfg: SceneEntityCfg, function_name: str
 ) -> int:

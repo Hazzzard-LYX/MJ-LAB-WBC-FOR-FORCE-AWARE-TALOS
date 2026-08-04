@@ -90,11 +90,14 @@
             <inertial pos="-0.00157211 -0.00157919 0.0217577" quat="0.679576 0.71147 -0.126684 0.126246" mass="0.73746" diaginertia="0.0022809 0.00202202 0.00110971"/>
             <joint name="head_1_joint" pos="0 0 0" axis="0 1 0" range="-0.20944 0.785398" actuatorfrcrange="-8 8" damping="0.5"/>
             <geom class="visual" material="black" mesh="head_1"/>
+            <geom name="head_1_collision" class="collision" type="mesh" mesh="head_1"/>
             <body name="head_2_link">
               <inertial pos="0.0108233 0.000630364 0.142045" quat="0.584927 -0.0294601 -0.0201927 0.810299" mass="1.46795" diaginertia="0.0110721 0.0109715 0.00581517"/>
               <joint name="head_2_joint" pos="0 0 0" axis="0 0 1" range="-1.309 1.309" actuatorfrcrange="-4 4" damping="0.5"/>
               <geom class="visual" material="white" mesh="head_2_default"/>
+              <geom name="head_2_collision" class="collision" type="mesh" mesh="head_2_default"/>
               <geom class="visual" pos="0.0621 0.0375 0.1832" quat="1 0 0 0" material="black" mesh="orbbec"/>
+              <geom name="orbbec_collision" class="collision" type="mesh" pos="0.0621 0.0375 0.1832" quat="1 0 0 0" mesh="orbbec"/>
               <site name="head" pos="0 0 0.2"/>
             </body>
           </body>
