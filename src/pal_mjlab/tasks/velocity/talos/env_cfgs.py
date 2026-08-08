@@ -48,6 +48,14 @@ from pal_mjlab.tasks.velocity import mdp as pal_mdp
 
 TALOS_PAYLOAD_MASS_RANGE = (2.0, 25.0)
 TALOS_TRAY_PAYLOAD_MASS_RANGE = (2.5, 30.0)
+# Bounds used to normalize the estimated payload COM position in the tray
+# frame.  The horizontal limits match the payload-drop termination envelope;
+# the vertical interval includes a settled cube and brief contact transients.
+TALOS_TRAY_PAYLOAD_POSITION_RANGE_T = (
+  (-0.38, 0.38),
+  (-0.49, 0.49),
+  (-0.05, 0.40),
+)
 TALOS_MASS_ESTIMATOR_HISTORY_LENGTH = 8
 TALOS_MASS_ESTIMATOR_TERM_NAMES = (
   "base_lin_vel",
@@ -696,6 +704,61 @@ def pal_talos_estimated_mass_zero_joint_torque_tray_flat_env_cfg(
       func=pal_mdp.zero_joint_torque_sensor,
       noise=None,
     )
+  return cfg
+
+
+def pal_talos_estimated_payload_state_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Estimate payload mass and tray-frame position from torque-aware history.
+
+  Joint torque is available only to the estimator.  Actor and critic consume
+  the estimator's normalized four-dimensional output instead of torque or
+  simulator payload state.  Ground-truth mass and position remain isolated in
+  a training-only target group for the supervised auxiliary objective.
+  """
+  cfg = pal_talos_estimated_mass_tray_flat_env_cfg(play=play)
+
+  # The estimator group was deep-copied before these terms are removed, so it
+  # retains noisy deployable torque history while actor and critic do not.
+  cfg.observations["actor"].terms.pop("joint_torque_sensors")
+  cfg.observations["critic"].terms.pop("joint_torque_sensors")
+
+  # Do not let the critic bypass the estimator through privileged object state.
+  for term_name in (
+    "payload_pos_t",
+    "payload_relative_velocity_t",
+    "payload_mass",
+  ):
+    cfg.observations["critic"].terms.pop(term_name)
+
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  tray_cfg = SceneEntityCfg("robot", body_names=(TALOS_TRAY_BODY_NAME,))
+  cfg.observations.pop("payload_mass_target")
+  cfg.observations["payload_state_target"] = ObservationGroupCfg(
+    terms={
+      "payload_mass": ObservationTermCfg(
+        func=pal_mdp.payload_mass,
+        params={"asset_cfg": payload_cfg},
+        clip=TALOS_TRAY_PAYLOAD_MASS_RANGE,
+      ),
+      "payload_pos_t": ObservationTermCfg(
+        func=pal_mdp.payload_pos_t,
+        params={"tray_cfg": tray_cfg, "payload_cfg": payload_cfg},
+      ),
+    },
+    concatenate_terms=True,
+    enable_corruption=False,
+  )
+  cfg.observations["estimated_payload_state"] = ObservationGroupCfg(
+    terms={
+      "estimated_payload_state": ObservationTermCfg(
+        func=pal_mdp.zero_payload_state,
+      )
+    },
+    concatenate_terms=True,
+    enable_corruption=False,
+  )
   return cfg
 
 

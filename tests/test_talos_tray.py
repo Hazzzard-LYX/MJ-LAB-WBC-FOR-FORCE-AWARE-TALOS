@@ -45,9 +45,11 @@ from pal_mjlab.tasks.velocity.talos.env_cfgs import (
   TALOS_TORQUE_SENSOR_NAMES,
   TALOS_TRAY_PAYLOAD_ALPHA_RANGE,
   TALOS_TRAY_PAYLOAD_MASS_RANGE,
+  TALOS_TRAY_PAYLOAD_POSITION_RANGE_T,
   TALOS_UNIFORM_MASS_DISTRIBUTION,
   pal_talos_estimated_mass_tray_flat_env_cfg,
   pal_talos_estimated_mass_zero_joint_torque_tray_flat_env_cfg,
+  pal_talos_estimated_payload_state_tray_flat_env_cfg,
   pal_talos_flat_env_cfg,
   pal_talos_free_payload_tray_flat_env_cfg,
   pal_talos_grasping_tray_flat_env_cfg,
@@ -60,6 +62,7 @@ from pal_mjlab.tasks.velocity.talos.env_cfgs import (
 from pal_mjlab.tasks.velocity.talos.rl_cfg import (
   pal_talos_estimated_mass_tray_ppo_runner_cfg,
   pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg,
+  pal_talos_estimated_payload_state_tray_ppo_runner_cfg,
   pal_talos_free_payload_tray_ppo_runner_cfg,
   pal_talos_grasping_random_mass_tray_ppo_runner_cfg,
   pal_talos_grasping_tray_ppo_runner_cfg,
@@ -468,6 +471,45 @@ def test_estimator_zero_torque_ablation_preserves_observation_contract() -> None
     pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg().experiment_name
     == "talos_random_mass_tray_estimator_zero_joint_torque_h8"
   )
+
+
+def test_payload_state_estimator_keeps_torque_private_and_removes_true_state() -> None:
+  cfg = pal_talos_estimated_payload_state_tray_flat_env_cfg()
+
+  assert "joint_torque_sensors" not in cfg.observations["actor"].terms
+  assert "joint_torque_sensors" not in cfg.observations["critic"].terms
+  assert "joint_torque_sensors" in cfg.observations["mass_estimator"].terms
+
+  for term_name in (
+    "payload_mass",
+    "payload_pos_t",
+    "payload_relative_velocity_t",
+  ):
+    assert term_name not in cfg.observations["critic"].terms
+
+  target = cfg.observations["payload_state_target"]
+  assert tuple(target.terms) == ("payload_mass", "payload_pos_t")
+  assert not target.enable_corruption
+  assert "payload_mass_target" not in cfg.observations
+  assert tuple(cfg.observations["estimated_payload_state"].terms) == (
+    "estimated_payload_state",
+  )
+  assert TALOS_TRAY_PAYLOAD_POSITION_RANGE_T == (
+    (-0.38, 0.38),
+    (-0.49, 0.49),
+    (-0.05, 0.40),
+  )
+
+  runner_cfg = pal_talos_estimated_payload_state_tray_ppo_runner_cfg()
+  assert "PayloadStateEstimatorModel" in runner_cfg.actor.class_name
+  assert "PayloadStateEstimatorPPO" in runner_cfg.algorithm.class_name
+  assert runner_cfg.obs_groups["actor"] == ("actor",)
+  assert runner_cfg.obs_groups["critic"] == (
+    "critic",
+    "estimated_payload_state",
+  )
+  assert runner_cfg.obs_groups["mass_estimator"] == ("mass_estimator",)
+  assert runner_cfg.experiment_name == "talos_random_mass_tray_state_estimator_h8"
 
 
 def test_oracle_task_exposes_only_scaled_true_mass_to_actor() -> None:

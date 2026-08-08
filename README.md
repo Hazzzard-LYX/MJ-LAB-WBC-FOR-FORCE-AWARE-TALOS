@@ -26,12 +26,13 @@ The free cube is a standalone six-DoF body. It can slide, tip, and fall from the
 tray under contact dynamics. Four registered tasks isolate how payload mass is
 provided to the policy:
 
-| Task suffix | Payload mass | Actor mass input | Critic mass input |
+| Task suffix | Actor payload input | Critic payload input | Joint torque |
 | --- | --- | --- | --- |
-| `Free-Payload-Tray-Fixed-2p5kg` | fixed 2.5 kg | none | true |
-| `Tray-Random-Mass-Critic` | random 2.5--30 kg | none | true |
-| `Tray-Random-Mass-Estimator` | random 2.5--30 kg | learned estimate | true |
-| `Tray-Random-Mass-Oracle` | random 2.5--30 kg | true | true |
+| `Free-Payload-Tray-Fixed-2p5kg` | none | true state | actor + critic |
+| `Tray-Random-Mass-Critic` | none | true state | actor + critic |
+| `Tray-Random-Mass-Estimator` | estimated mass | true state | actor + critic + estimator |
+| `Tray-Random-Mass-State-Estimator` | estimated mass + position | same estimate | estimator only |
+| `Tray-Random-Mass-Oracle` | true mass | true state | actor + critic |
 
 The estimator task uses an eight-step history made only from deployable
 proprioception: encoder state, previous action, IMU channels, instrumented joint
@@ -40,6 +41,13 @@ simulator payload mass. The simulator target is not part of the Actor
 observation. Its ONNX export has two inputs (`actor_obs` and
 `proprioceptive_history`) and returns both `actions` and
 `estimated_payload_mass_kg`.
+
+The state-estimator variant makes joint torque private to the eight-step
+estimator history. Actor and critic receive neither torque nor simulator
+payload state; both are conditioned on the same estimated mass and three-axis
+payload COM position in the tray frame. True mass and position are used only by
+the supervised estimator objective. Its export additionally returns
+`estimated_payload_position_t_m`.
 
 This repository is derived from
 [PAL Robotics' pal_mjlab](https://github.com/pal-robotics/pal_mjlab). The
@@ -117,6 +125,8 @@ Train the three random-mass comparisons:
 uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Critic \
   --env.scene.num-envs 1024
 uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Estimator \
+  --env.scene.num-envs 1024
+uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-State-Estimator \
   --env.scene.num-envs 1024
 uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Oracle \
   --env.scene.num-envs 1024
