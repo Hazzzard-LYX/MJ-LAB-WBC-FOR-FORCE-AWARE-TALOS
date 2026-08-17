@@ -242,3 +242,15 @@ def pal_talos_grasping_random_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerC
   cfg.experiment_name = "talos_contact_grasp_tray_random_mass"
   cfg.max_iterations = 40_000
   return cfg
+
+
+def pal_talos_grasping_payload_state_estimator_ppo_runner_cfg() -> (
+  RslRlOnPolicyRunnerCfg
+):
+  """Create the torque-private estimator runner for contact-only grasping."""
+  cfg = pal_talos_estimated_payload_state_tray_ppo_runner_cfg()
+  cfg.experiment_name = (
+    f"talos_contact_grasp_tray_random_mass_state_estimator_h"
+    f"{TALOS_MASS_ESTIMATOR_HISTORY_LENGTH}"
+  )
+  return cfg

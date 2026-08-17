@@ -1042,3 +1042,76 @@ def pal_talos_grasping_tray_flat_env_cfg(
       },
     )
   return cfg
+
+
+def pal_talos_grasping_estimated_payload_state_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Estimate payload state while the free tray is held only by contact.
+
+  The tray remains an independent six-DoF entity and payload mass is randomized
+  from 2.5 to 30 kg.  Joint torque is private to the estimator; actor and critic
+  receive the estimator's mass and tray-frame payload-position prediction while
+  simulator payload truth is used only by the supervised auxiliary objective.
+  """
+  cfg = pal_talos_grasping_tray_flat_env_cfg(
+    play=play,
+    randomize_payload_mass=True,
+  )
+  actor_group = cfg.observations["actor"]
+  estimator_terms = {
+    name: deepcopy(actor_group.terms[name]) for name in TALOS_MASS_ESTIMATOR_TERM_NAMES
+  }
+  cfg.observations["mass_estimator"] = ObservationGroupCfg(
+    terms=estimator_terms,
+    concatenate_terms=True,
+    enable_corruption=actor_group.enable_corruption,
+    history_length=TALOS_MASS_ESTIMATOR_HISTORY_LENGTH,
+    flatten_history_dim=True,
+    nan_policy="sanitize",
+    nan_check_per_term=False,
+  )
+
+  # Torque remains in the estimator's deep-copied hardware history but is not
+  # directly available to either policy network.
+  cfg.observations["actor"].terms.pop("joint_torque_sensors")
+  cfg.observations["critic"].terms.pop("joint_torque_sensors")
+
+  # Retain grasp-specific critic privileges (handle error, slip, tray attitude),
+  # but prevent direct access to the payload state that the estimator predicts.
+  for term_name in (
+    "payload_pos_t",
+    "payload_relative_velocity_t",
+    "payload_mass",
+  ):
+    cfg.observations["critic"].terms.pop(term_name)
+
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  tray_cfg = SceneEntityCfg("tray", body_names=(TALOS_TRAY_BODY_NAME,))
+  cfg.observations["payload_state_target"] = ObservationGroupCfg(
+    terms={
+      "payload_mass": ObservationTermCfg(
+        func=pal_mdp.payload_mass,
+        params={"asset_cfg": payload_cfg},
+        clip=TALOS_TRAY_PAYLOAD_MASS_RANGE,
+      ),
+      "payload_pos_t": ObservationTermCfg(
+        func=pal_mdp.payload_pos_t,
+        params={"tray_cfg": tray_cfg, "payload_cfg": payload_cfg},
+      ),
+    },
+    concatenate_terms=True,
+    enable_corruption=False,
+    nan_policy="sanitize",
+    nan_check_per_term=False,
+  )
+  cfg.observations["estimated_payload_state"] = ObservationGroupCfg(
+    terms={
+      "estimated_payload_state": ObservationTermCfg(
+        func=pal_mdp.zero_payload_state,
+      )
+    },
+    concatenate_terms=True,
+    enable_corruption=False,
+  )
+  return cfg

@@ -142,6 +142,9 @@ uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp \
   --env.scene.num-envs 1024
 uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp-Random-Mass \
   --env.scene.num-envs 1024
+uv run train \
+  Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp-Random-Mass-State-Estimator \
+  --env.scene.num-envs 1024
 ```
 
 The actor observes the two real commanded gripper encoders plus the existing
@@ -149,6 +152,12 @@ deployable TALOS proprioception and force/torque channels.  Tray pose, handle
 slip, contacts, and payload truth are critic-only signals.  The restored
 three-finger linkage retains one commanded joint per hand and mechanically
 couples all passive finger joints.
+
+The contact-grasp state-estimator variant keeps the tray free and preserves the
+same rigid high-friction contacts.  Joint torque is private to an eight-step
+hardware-history estimator.  Its predicted payload mass and tray-frame payload
+position condition both actor and critic, while payload truth is used only as
+the estimator's supervised training target.
 
 To visualize an early checkpoint from a cluster training job, submit
 `slurm/mjlab-contact-grasp-livestream.sbatch` with `TRAIN_JOB_ID` and the

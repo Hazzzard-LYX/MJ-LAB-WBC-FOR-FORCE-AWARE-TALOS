@@ -52,6 +52,7 @@ from pal_mjlab.tasks.velocity.talos.env_cfgs import (
   pal_talos_estimated_payload_state_tray_flat_env_cfg,
   pal_talos_flat_env_cfg,
   pal_talos_free_payload_tray_flat_env_cfg,
+  pal_talos_grasping_estimated_payload_state_tray_flat_env_cfg,
   pal_talos_grasping_tray_flat_env_cfg,
   pal_talos_oracle_mass_tray_flat_env_cfg,
   pal_talos_payload_flat_env_cfg,
@@ -64,6 +65,7 @@ from pal_mjlab.tasks.velocity.talos.rl_cfg import (
   pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg,
   pal_talos_estimated_payload_state_tray_ppo_runner_cfg,
   pal_talos_free_payload_tray_ppo_runner_cfg,
+  pal_talos_grasping_payload_state_estimator_ppo_runner_cfg,
   pal_talos_grasping_random_mass_tray_ppo_runner_cfg,
   pal_talos_grasping_tray_ppo_runner_cfg,
   pal_talos_oracle_mass_tray_ppo_runner_cfg,
@@ -510,6 +512,65 @@ def test_payload_state_estimator_keeps_torque_private_and_removes_true_state() -
   )
   assert runner_cfg.obs_groups["mass_estimator"] == ("mass_estimator",)
   assert runner_cfg.experiment_name == "talos_random_mass_tray_state_estimator_h8"
+
+
+def test_contact_grasp_state_estimator_keeps_free_tray_and_private_torque() -> None:
+  cfg = pal_talos_grasping_estimated_payload_state_tray_flat_env_cfg()
+
+  assert set(cfg.scene.entities) == {"robot", "payload", "tray"}
+  assert cfg.scene.entities["robot"].spec_fn is get_grasping_spec
+  assert cfg.scene.entities["tray"].spec_fn is get_free_hand_tray_spec
+  assert "payload_inertia" in cfg.events
+  assert "gripper_tray_contact" in {sensor.name for sensor in cfg.scene.sensors}
+  assert "tray_grasp_lost" in cfg.terminations
+
+  actor_terms = cfg.observations["actor"].terms
+  critic_terms = cfg.observations["critic"].terms
+  estimator_group = cfg.observations["mass_estimator"]
+  assert "joint_torque_sensors" not in actor_terms
+  assert "joint_torque_sensors" not in critic_terms
+  assert "joint_torque_sensors" in estimator_group.terms
+  assert estimator_group.history_length == TALOS_MASS_ESTIMATOR_HISTORY_LENGTH
+  assert estimator_group.nan_policy == "sanitize"
+  assert (
+    "gripper_(left|right)_joint"
+    in estimator_group.terms["joint_pos"].params["asset_cfg"].joint_names
+  )
+
+  for term_name in (
+    "payload_mass",
+    "payload_pos_t",
+    "payload_relative_velocity_t",
+  ):
+    assert term_name not in critic_terms
+  for grasp_term in (
+    "tray_handle_offsets_w",
+    "tray_handle_relative_velocity_w",
+    "tray_projected_gravity",
+  ):
+    assert grasp_term in critic_terms
+
+  target = cfg.observations["payload_state_target"]
+  assert tuple(target.terms) == ("payload_mass", "payload_pos_t")
+  assert target.terms["payload_pos_t"].params["tray_cfg"].name == "tray"
+  assert not target.enable_corruption
+  assert tuple(cfg.observations["estimated_payload_state"].terms) == (
+    "estimated_payload_state",
+  )
+
+  runner_cfg = pal_talos_grasping_payload_state_estimator_ppo_runner_cfg()
+  assert "PayloadStateEstimatorModel" in runner_cfg.actor.class_name
+  assert "PayloadStateEstimatorPPO" in runner_cfg.algorithm.class_name
+  assert runner_cfg.obs_groups["actor"] == ("actor",)
+  assert runner_cfg.obs_groups["critic"] == (
+    "critic",
+    "estimated_payload_state",
+  )
+  assert runner_cfg.obs_groups["mass_estimator"] == ("mass_estimator",)
+  assert (
+    runner_cfg.experiment_name
+    == "talos_contact_grasp_tray_random_mass_state_estimator_h8"
+  )
 
 
 def test_oracle_task_exposes_only_scaled_true_mass_to_actor() -> None:
