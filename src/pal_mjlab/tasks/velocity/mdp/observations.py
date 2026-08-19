@@ -71,6 +71,17 @@ def zero_joint_torque_sensor(
   return torch.zeros_like(asset.data.qfrc_actuator[:, asset_cfg.joint_ids])
 
 
+def zero_payload_state(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """Return a four-dimensional placeholder for learned mass and position.
+
+  The estimator-conditioned PPO algorithm replaces this value before the
+  critic is evaluated.  Keeping the placeholder in the environment's
+  observation dictionary makes the critic input shape explicit when the
+  runner constructs its networks and rollout storage.
+  """
+  return torch.zeros((env.num_envs, 4), device=env.device)
+
+
 def force_torque_wrenches_w(
   env: ManagerBasedRlEnv,
   asset_cfg: SceneEntityCfg,

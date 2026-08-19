@@ -26,12 +26,13 @@ The free cube is a standalone six-DoF body. It can slide, tip, and fall from the
 tray under contact dynamics. Four registered tasks isolate how payload mass is
 provided to the policy:
 
-| Task suffix | Payload mass | Actor mass input | Critic mass input |
+| Task suffix | Actor payload input | Critic payload input | Joint torque |
 | --- | --- | --- | --- |
-| `Free-Payload-Tray-Fixed-2p5kg` | fixed 2.5 kg | none | true |
-| `Tray-Random-Mass-Critic` | random 2.5--30 kg | none | true |
-| `Tray-Random-Mass-Estimator` | random 2.5--30 kg | learned estimate | true |
-| `Tray-Random-Mass-Oracle` | random 2.5--30 kg | true | true |
+| `Free-Payload-Tray-Fixed-2p5kg` | none | true state | actor + critic |
+| `Tray-Random-Mass-Critic` | none | true state | actor + critic |
+| `Tray-Random-Mass-Estimator` | estimated mass | true state | actor + critic + estimator |
+| `Tray-Random-Mass-State-Estimator` | estimated mass + position | same estimate | estimator only |
+| `Tray-Random-Mass-Oracle` | true mass | true state | actor + critic |
 
 The estimator task uses an eight-step history made only from deployable
 proprioception: encoder state, previous action, IMU channels, instrumented joint
@@ -40,6 +41,13 @@ simulator payload mass. The simulator target is not part of the Actor
 observation. Its ONNX export has two inputs (`actor_obs` and
 `proprioceptive_history`) and returns both `actions` and
 `estimated_payload_mass_kg`.
+
+The state-estimator variant makes joint torque private to the eight-step
+estimator history. Actor and critic receive neither torque nor simulator
+payload state; both are conditioned on the same estimated mass and three-axis
+payload COM position in the tray frame. True mass and position are used only by
+the supervised estimator objective. Its export additionally returns
+`estimated_payload_position_t_m`.
 
 This repository is derived from
 [PAL Robotics' pal_mjlab](https://github.com/pal-robotics/pal_mjlab). The
@@ -118,6 +126,8 @@ uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Critic \
   --env.scene.num-envs 1024
 uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Estimator \
   --env.scene.num-envs 1024
+uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-State-Estimator \
+  --env.scene.num-envs 1024
 uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Random-Mass-Oracle \
   --env.scene.num-envs 1024
 ```
@@ -132,6 +142,9 @@ uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp \
   --env.scene.num-envs 1024
 uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp-Random-Mass \
   --env.scene.num-envs 1024
+uv run train \
+  Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp-Random-Mass-State-Estimator \
+  --env.scene.num-envs 1024
 ```
 
 The actor observes the two real commanded gripper encoders plus the existing
@@ -139,6 +152,12 @@ deployable TALOS proprioception and force/torque channels.  Tray pose, handle
 slip, contacts, and payload truth are critic-only signals.  The restored
 three-finger linkage retains one commanded joint per hand and mechanically
 couples all passive finger joints.
+
+The contact-grasp state-estimator variant keeps the tray free and preserves the
+same rigid high-friction contacts.  Joint torque is private to an eight-step
+hardware-history estimator.  Its predicted payload mass and tray-frame payload
+position condition both actor and critic, while payload truth is used only as
+the estimator's supervised training target.
 
 To visualize an early checkpoint from a cluster training job, submit
 `slurm/mjlab-contact-grasp-livestream.sbatch` with `TRAIN_JOB_ID` and the
