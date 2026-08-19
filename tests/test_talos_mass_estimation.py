@@ -4,6 +4,7 @@ from pal_mjlab.tasks.velocity.talos.mass_estimation import (
   PayloadMassEstimatorPPO,
   PayloadStateEstimatorModel,
   PayloadStateEstimatorPPO,
+  StandalonePayloadStateEstimator,
 )
 from rsl_rl.models import MLPModel
 from rsl_rl.storage import RolloutStorage
@@ -240,3 +241,61 @@ def test_state_estimator_supervises_mass_and_position_and_injects_critic() -> No
     obs["estimated_payload_state"],
     actor.latest_payload_state_normalized.detach(),
   )
+
+
+def test_standalone_estimator_has_independent_supervised_gradients() -> None:
+  batch_size = 16
+  observations = torch.randn(batch_size, 24)
+  target = torch.cat(
+    (
+      torch.linspace(2.5, 30.0, batch_size).unsqueeze(-1),
+      torch.stack(
+        (
+          torch.linspace(-0.2, 0.2, batch_size),
+          torch.linspace(0.3, -0.3, batch_size),
+          torch.full((batch_size,), 0.15),
+        ),
+        dim=-1,
+      ),
+    ),
+    dim=-1,
+  )
+  model = StandalonePayloadStateEstimator(
+    observations.shape[-1],
+    hidden_dims=(16, 8),
+  )
+  model.update_normalization(observations)
+
+  loss, metrics = model.objective(observations, target)
+  loss.backward()
+  mass_kg, position_t = model(observations)
+
+  assert set(metrics) == {
+    "loss",
+    "mass_loss",
+    "position_loss",
+    "mass_mae_kg",
+    "position_mae_m",
+  }
+  assert mass_kg.shape == (batch_size, 1)
+  assert position_t.shape == (batch_size, 3)
+  assert torch.all((mass_kg >= 2.5) & (mass_kg <= 30.0))
+  assert any(
+    parameter.grad is not None and torch.count_nonzero(parameter.grad) > 0
+    for parameter in model.network.parameters()
+  )
+
+
+def test_standalone_estimator_state_dict_includes_input_normalization() -> None:
+  model = StandalonePayloadStateEstimator(12, hidden_dims=(8, 4))
+  observations = torch.randn(32, 12) + 3.0
+  model.update_normalization(observations)
+
+  restored = StandalonePayloadStateEstimator(12, hidden_dims=(8, 4))
+  restored.load_state_dict(model.state_dict())
+
+  torch.testing.assert_close(
+    restored.obs_normalizer.mean,
+    model.obs_normalizer.mean,
+  )
+  torch.testing.assert_close(restored(observations)[0], model(observations)[0])

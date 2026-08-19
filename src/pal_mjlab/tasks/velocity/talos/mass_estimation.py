@@ -447,6 +447,131 @@ class _ExportablePayloadStateEstimator(nn.Module):
     """Reset recurrent state (no-op for the feed-forward history encoder)."""
 
 
+class StandalonePayloadStateEstimator(nn.Module):
+  """Supervised payload-state estimator with no policy-gradient path.
+
+  This module is intentionally independent from :class:`MLPModel`.  It can be
+  trained from frozen-policy rollouts and later copied into a deployable actor.
+  Mass and position use separate losses so the three position coordinates do
+  not dilute the single mass target.
+  """
+
+  def __init__(
+    self,
+    input_dim: int,
+    *,
+    hidden_dims: tuple[int, ...] | list[int] = (512, 256, 128),
+    activation: str = "elu",
+    payload_mass_range: tuple[float, float] = (2.5, 30.0),
+    payload_position_range_t: tuple[
+      tuple[float, float],
+      tuple[float, float],
+      tuple[float, float],
+    ] = ((-0.38, 0.38), (-0.49, 0.49), (-0.05, 0.40)),
+  ) -> None:
+    super().__init__()
+    if input_dim <= 0:
+      raise ValueError(f"input_dim must be positive, got {input_dim}.")
+    mass_min, mass_max = payload_mass_range
+    if mass_min < 0.0 or mass_max <= mass_min:
+      raise ValueError(f"Invalid payload mass range: {payload_mass_range}.")
+    position_min = torch.tensor(
+      [bounds[0] for bounds in payload_position_range_t], dtype=torch.float32
+    )
+    position_max = torch.tensor(
+      [bounds[1] for bounds in payload_position_range_t], dtype=torch.float32
+    )
+    if torch.any(position_max <= position_min):
+      raise ValueError(f"Invalid payload position range: {payload_position_range_t}.")
+
+    self.input_dim = input_dim
+    self.hidden_dims = tuple(hidden_dims)
+    self.activation = activation
+    self.obs_normalizer = EmpiricalNormalization(input_dim)
+    self.network = MLP(input_dim, 4, self.hidden_dims, activation)
+    self.register_buffer("payload_mass_min", torch.tensor(float(mass_min)))
+    self.register_buffer("payload_mass_span", torch.tensor(float(mass_max - mass_min)))
+    self.register_buffer("payload_position_min_t", position_min)
+    self.register_buffer("payload_position_max_t", position_max)
+    self.register_buffer(
+      "payload_position_center_t", 0.5 * (position_min + position_max)
+    )
+    self.register_buffer(
+      "payload_position_half_span_t", 0.5 * (position_max - position_min)
+    )
+
+  @torch.no_grad()
+  def update_normalization(self, observations: torch.Tensor) -> None:
+    """Update input statistics from training environments only."""
+    self.obs_normalizer.update(observations)
+
+  def estimate_normalized(self, observations: torch.Tensor) -> torch.Tensor:
+    """Return normalized mass in ``[0, 1]`` and position in ``[-1, 1]``."""
+    raw_estimate = self.network(self.obs_normalizer(observations))
+    return torch.cat(
+      (torch.sigmoid(raw_estimate[:, :1]), torch.tanh(raw_estimate[:, 1:])),
+      dim=-1,
+    )
+
+  def forward(self, observations: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return payload mass in kilograms and tray-frame position in metres."""
+    estimate = self.estimate_normalized(observations)
+    mass_kg = self.payload_mass_min + self.payload_mass_span * estimate[:, :1]
+    position_t = (
+      self.payload_position_center_t
+      + self.payload_position_half_span_t * estimate[:, 1:]
+    )
+    return mass_kg, position_t
+
+  def objective(
+    self,
+    observations: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    mass_loss_weight: float = 1.0,
+    position_loss_weight: float = 1.0,
+    huber_beta: float = 0.05,
+  ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute separately weighted normalized supervision and physical MAEs."""
+    if target.shape[-1] != 4:
+      raise ValueError(f"Expected a four-dimensional target, got {target.shape}.")
+    estimate = self.estimate_normalized(observations)
+    target_mass = target[:, :1]
+    target_position_t = target[:, 1:]
+    target_mass_normalized = (
+      (target_mass - self.payload_mass_min) / self.payload_mass_span
+    ).clamp(0.0, 1.0)
+    target_position_normalized = (
+      (target_position_t - self.payload_position_center_t)
+      / self.payload_position_half_span_t
+    ).clamp(-1.0, 1.0)
+
+    mass_loss = F.smooth_l1_loss(
+      estimate[:, :1], target_mass_normalized, beta=huber_beta
+    )
+    position_loss = F.smooth_l1_loss(
+      estimate[:, 1:], target_position_normalized, beta=huber_beta
+    )
+    loss = mass_loss_weight * mass_loss + position_loss_weight * position_loss
+
+    estimated_mass_kg = self.payload_mass_min + self.payload_mass_span * estimate[:, :1]
+    estimated_position_t = (
+      self.payload_position_center_t
+      + self.payload_position_half_span_t * estimate[:, 1:]
+    )
+    return loss, {
+      "loss": loss.detach(),
+      "mass_loss": mass_loss.detach(),
+      "position_loss": position_loss.detach(),
+      "mass_mae_kg": F.l1_loss(estimated_mass_kg, target_mass).detach(),
+      "position_mae_m": torch.linalg.vector_norm(
+        estimated_position_t - target_position_t, dim=-1
+      )
+      .mean()
+      .detach(),
+    }
+
+
 class PayloadMassEstimatorPPO(PPO):
   """PPO with supervised payload-mass estimation as an auxiliary objective."""
 
