@@ -4,6 +4,7 @@ from pal_mjlab.tasks.velocity.talos.mass_estimation import (
   PayloadMassEstimatorPPO,
   PayloadStateEstimatorModel,
   PayloadStateEstimatorPPO,
+  StandalonePayloadMassEstimator,
   StandalonePayloadStateEstimator,
 )
 from rsl_rl.models import MLPModel
@@ -299,3 +300,50 @@ def test_standalone_estimator_state_dict_includes_input_normalization() -> None:
     model.obs_normalizer.mean,
   )
   torch.testing.assert_close(restored(observations)[0], model(observations)[0])
+
+
+def test_wrist_ft_mass_estimator_has_unconstrained_supervised_output() -> None:
+  observations = torch.randn(32, 48)
+  target = torch.linspace(2.5, 30.0, 32).unsqueeze(-1)
+  model = StandalonePayloadMassEstimator(observations.shape[-1], hidden_dims=(16, 8))
+  model.update_normalization(observations)
+
+  loss, metrics = model.objective(observations, target)
+  loss.backward()
+
+  assert set(metrics) == {
+    "loss",
+    "mass_mae_kg",
+    "mass_rmse_kg",
+    "mass_bias_kg",
+    "mass_prediction_std_kg",
+    "mass_r2",
+  }
+  assert model(observations).shape == (32, 1)
+  assert any(
+    parameter.grad is not None and torch.count_nonzero(parameter.grad) > 0
+    for parameter in model.network.parameters()
+  )
+
+  with torch.no_grad():
+    for parameter in model.network.parameters():
+      parameter.zero_()
+    final_layer = [
+      module
+      for module in model.network.modules()
+      if isinstance(module, torch.nn.Linear)
+    ][-1]
+    final_layer.bias.fill_(2.0)
+  assert torch.all(model(observations) > 30.0)
+
+
+def test_wrist_ft_mass_estimator_state_dict_includes_normalization() -> None:
+  model = StandalonePayloadMassEstimator(24, hidden_dims=(8, 4))
+  observations = torch.randn(32, 24) - 2.0
+  model.update_normalization(observations)
+
+  restored = StandalonePayloadMassEstimator(24, hidden_dims=(8, 4))
+  restored.load_state_dict(model.state_dict())
+
+  torch.testing.assert_close(restored.obs_normalizer.mean, model.obs_normalizer.mean)
+  torch.testing.assert_close(restored(observations), model(observations))
