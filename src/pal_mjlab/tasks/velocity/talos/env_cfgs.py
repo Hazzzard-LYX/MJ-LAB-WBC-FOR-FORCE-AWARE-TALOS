@@ -71,6 +71,12 @@ TALOS_MASS_ESTIMATOR_TERM_NAMES = (
   "right_wrist_ft_force",
   "right_wrist_ft_torque",
 )
+TALOS_WRIST_FT_ESTIMATOR_TERM_NAMES = (
+  "left_wrist_ft_force",
+  "left_wrist_ft_torque",
+  "right_wrist_ft_force",
+  "right_wrist_ft_torque",
+)
 TALOS_PAYLOAD_POS_RANGES = {
   0: (0.20, 0.55),
   1: (-0.20, 0.20),
@@ -1113,5 +1119,49 @@ def pal_talos_grasping_estimated_payload_state_tray_flat_env_cfg(
     },
     concatenate_terms=True,
     enable_corruption=False,
+  )
+  return cfg
+
+
+def pal_talos_grasping_wrist_ft_mass_identification_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Expose noisy wrist F/T history and a training-only payload mass target.
+
+  The behavior-policy observation contract is identical to the estimator-free
+  random-mass contact-grasp task.  The extra groups are consumed only by the
+  standalone system-identification trainer, so an existing pure contact-grasp
+  actor checkpoint can generate rollouts without depending on any estimator.
+  """
+  cfg = pal_talos_grasping_tray_flat_env_cfg(
+    play=play,
+    randomize_payload_mass=True,
+  )
+  actor_group = cfg.observations["actor"]
+  cfg.observations["wrist_ft_mass_estimator"] = ObservationGroupCfg(
+    terms={
+      name: deepcopy(actor_group.terms[name])
+      for name in TALOS_WRIST_FT_ESTIMATOR_TERM_NAMES
+    },
+    concatenate_terms=True,
+    enable_corruption=actor_group.enable_corruption,
+    history_length=32,
+    flatten_history_dim=True,
+    nan_policy="sanitize",
+    nan_check_per_term=False,
+  )
+
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  cfg.observations["payload_mass_target"] = ObservationGroupCfg(
+    terms={
+      "payload_mass": ObservationTermCfg(
+        func=pal_mdp.payload_mass,
+        params={"asset_cfg": payload_cfg},
+      )
+    },
+    concatenate_terms=True,
+    enable_corruption=False,
+    nan_policy="sanitize",
+    nan_check_per_term=False,
   )
   return cfg

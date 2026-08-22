@@ -572,6 +572,93 @@ class StandalonePayloadStateEstimator(nn.Module):
     }
 
 
+class StandalonePayloadMassEstimator(nn.Module):
+  """Mass-only estimator for standalone wrist F/T system identification.
+
+  Unlike the policy-coupled estimators, this model has a linear normalized
+  output.  It is trained on the in-distribution range but is not structurally
+  clamped to it, which keeps calibration and OOD saturation observable.
+  """
+
+  def __init__(
+    self,
+    input_dim: int,
+    *,
+    hidden_dims: tuple[int, ...] | list[int] = (256, 128, 64),
+    activation: str = "elu",
+    payload_mass_range: tuple[float, float] = (2.5, 30.0),
+  ) -> None:
+    super().__init__()
+    if input_dim <= 0:
+      raise ValueError(f"input_dim must be positive, got {input_dim}.")
+    mass_min, mass_max = payload_mass_range
+    if mass_min < 0.0 or mass_max <= mass_min:
+      raise ValueError(f"Invalid payload mass range: {payload_mass_range}.")
+
+    self.input_dim = input_dim
+    self.hidden_dims = tuple(hidden_dims)
+    self.activation = activation
+    self.obs_normalizer = EmpiricalNormalization(input_dim)
+    self.network = MLP(input_dim, 1, self.hidden_dims, activation)
+    self.register_buffer(
+      "payload_mass_center", torch.tensor(0.5 * (mass_min + mass_max))
+    )
+    self.register_buffer(
+      "payload_mass_half_span", torch.tensor(0.5 * (mass_max - mass_min))
+    )
+
+  @torch.no_grad()
+  def update_normalization(self, observations: torch.Tensor) -> None:
+    """Update input statistics from training samples only."""
+    self.obs_normalizer.update(observations)
+
+  def estimate_normalized(self, observations: torch.Tensor) -> torch.Tensor:
+    """Return an unconstrained mass estimate normalized around the range centre."""
+    return self.network(self.obs_normalizer(observations))
+
+  def forward(self, observations: torch.Tensor) -> torch.Tensor:
+    """Return the unconstrained payload mass estimate in kilograms."""
+    return self.payload_mass_center + self.payload_mass_half_span * (
+      self.estimate_normalized(observations)
+    )
+
+  def objective(
+    self,
+    observations: torch.Tensor,
+    target_mass_kg: torch.Tensor,
+    *,
+    huber_beta: float = 0.05,
+  ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Supervise normalized mass and report physical calibration metrics."""
+    if target_mass_kg.ndim != 2 or target_mass_kg.shape[-1] != 1:
+      raise ValueError(
+        f"Expected a [batch, 1] mass target, got {target_mass_kg.shape}."
+      )
+    estimate_normalized = self.estimate_normalized(observations)
+    target_normalized = (
+      target_mass_kg - self.payload_mass_center
+    ) / self.payload_mass_half_span
+    loss = F.smooth_l1_loss(
+      estimate_normalized,
+      target_normalized,
+      beta=huber_beta,
+    )
+    estimated_mass_kg = self.payload_mass_center + self.payload_mass_half_span * (
+      estimate_normalized
+    )
+    error_kg = estimated_mass_kg - target_mass_kg
+    target_variance = torch.var(target_mass_kg, correction=0)
+    r2 = 1.0 - torch.mean(error_kg.square()) / target_variance.clamp_min(1.0e-8)
+    return loss, {
+      "loss": loss.detach(),
+      "mass_mae_kg": torch.mean(torch.abs(error_kg)).detach(),
+      "mass_rmse_kg": torch.sqrt(torch.mean(error_kg.square())).detach(),
+      "mass_bias_kg": torch.mean(error_kg).detach(),
+      "mass_prediction_std_kg": torch.std(estimated_mass_kg, correction=0).detach(),
+      "mass_r2": r2.detach(),
+    }
+
+
 class PayloadMassEstimatorPPO(PPO):
   """PPO with supervised payload-mass estimation as an auxiliary objective."""
 

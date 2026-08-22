@@ -47,6 +47,7 @@ from pal_mjlab.tasks.velocity.talos.env_cfgs import (
   TALOS_TRAY_PAYLOAD_MASS_RANGE,
   TALOS_TRAY_PAYLOAD_POSITION_RANGE_T,
   TALOS_UNIFORM_MASS_DISTRIBUTION,
+  TALOS_WRIST_FT_ESTIMATOR_TERM_NAMES,
   pal_talos_estimated_mass_tray_flat_env_cfg,
   pal_talos_estimated_mass_zero_joint_torque_tray_flat_env_cfg,
   pal_talos_estimated_payload_state_tray_flat_env_cfg,
@@ -54,6 +55,7 @@ from pal_mjlab.tasks.velocity.talos.env_cfgs import (
   pal_talos_free_payload_tray_flat_env_cfg,
   pal_talos_grasping_estimated_payload_state_tray_flat_env_cfg,
   pal_talos_grasping_tray_flat_env_cfg,
+  pal_talos_grasping_wrist_ft_mass_identification_tray_flat_env_cfg,
   pal_talos_oracle_mass_tray_flat_env_cfg,
   pal_talos_payload_flat_env_cfg,
   pal_talos_random_mass_tray_flat_env_cfg,
@@ -473,6 +475,25 @@ def test_estimator_zero_torque_ablation_preserves_observation_contract() -> None
     pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg().experiment_name
     == "talos_random_mass_tray_estimator_zero_joint_torque_h8"
   )
+
+
+def test_wrist_ft_mass_identification_uses_only_bilateral_wrist_wrenches() -> None:
+  cfg = pal_talos_grasping_wrist_ft_mass_identification_tray_flat_env_cfg()
+  estimator_group = cfg.observations["wrist_ft_mass_estimator"]
+
+  assert tuple(estimator_group.terms) == TALOS_WRIST_FT_ESTIMATOR_TERM_NAMES
+  assert estimator_group.history_length == 32
+  assert estimator_group.flatten_history_dim
+  assert estimator_group.enable_corruption
+  assert "joint_torque_sensors" not in estimator_group.terms
+  assert "imu_lin_acc" not in estimator_group.terms
+  assert "actions" not in estimator_group.terms
+
+  target_group = cfg.observations["payload_mass_target"]
+  assert tuple(target_group.terms) == ("payload_mass",)
+  assert not target_group.enable_corruption
+  assert "payload_mass_target" not in cfg.observations["actor"].terms
+  assert "estimated_payload_state" not in cfg.observations
 
 
 def test_payload_state_estimator_keeps_torque_private_and_removes_true_state() -> None:
