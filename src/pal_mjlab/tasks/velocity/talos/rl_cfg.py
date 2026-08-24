@@ -244,6 +244,14 @@ def pal_talos_grasping_random_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerC
   return cfg
 
 
+def pal_talos_grasping_oracle_mass_tray_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create the 2.5--15 kg true-mass free-contact teacher runner."""
+  cfg = pal_talos_ppo_runner_cfg()
+  cfg.experiment_name = "talos_contact_grasp_tray_oracle_2p5_15kg"
+  cfg.max_iterations = 30_000
+  return cfg
+
+
 def pal_talos_grasping_payload_state_estimator_ppo_runner_cfg() -> (
   RslRlOnPolicyRunnerCfg
 ):

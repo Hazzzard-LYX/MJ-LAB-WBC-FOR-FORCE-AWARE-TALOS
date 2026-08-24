@@ -40,6 +40,8 @@ from pal_mjlab.robots.pal_talos.talos_constants import (
   get_tray_spec,
 )
 from pal_mjlab.tasks.velocity.talos.env_cfgs import (
+  TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_ALPHA_RANGE,
+  TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_MASS_RANGE,
   TALOS_FORCE_SENSOR_NAMES,
   TALOS_MASS_ESTIMATOR_HISTORY_LENGTH,
   TALOS_TORQUE_SENSOR_NAMES,
@@ -54,6 +56,7 @@ from pal_mjlab.tasks.velocity.talos.env_cfgs import (
   pal_talos_flat_env_cfg,
   pal_talos_free_payload_tray_flat_env_cfg,
   pal_talos_grasping_estimated_payload_state_tray_flat_env_cfg,
+  pal_talos_grasping_oracle_mass_tray_flat_env_cfg,
   pal_talos_grasping_tray_flat_env_cfg,
   pal_talos_grasping_wrist_ft_mass_identification_tray_flat_env_cfg,
   pal_talos_oracle_mass_tray_flat_env_cfg,
@@ -67,6 +70,7 @@ from pal_mjlab.tasks.velocity.talos.rl_cfg import (
   pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg,
   pal_talos_estimated_payload_state_tray_ppo_runner_cfg,
   pal_talos_free_payload_tray_ppo_runner_cfg,
+  pal_talos_grasping_oracle_mass_tray_ppo_runner_cfg,
   pal_talos_grasping_payload_state_estimator_ppo_runner_cfg,
   pal_talos_grasping_random_mass_tray_ppo_runner_cfg,
   pal_talos_grasping_tray_ppo_runner_cfg,
@@ -306,6 +310,27 @@ def test_contact_grasp_task_uses_deployable_actor_and_staged_commands() -> None:
   assert (
     pal_talos_grasping_random_mass_tray_ppo_runner_cfg().experiment_name
     == "talos_contact_grasp_tray_random_mass"
+  )
+
+
+def test_contact_grasp_oracle_uses_true_mass_and_narrower_range() -> None:
+  cfg = pal_talos_grasping_oracle_mass_tray_flat_env_cfg()
+  oracle = cfg.observations["actor"].terms["payload_mass_oracle"]
+
+  assert cfg.scene.entities["tray"].spec_fn is get_free_hand_tray_spec
+  assert cfg.events["payload_inertia"].params["alpha_range"] == (
+    TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_ALPHA_RANGE
+  )
+  assert oracle.clip == TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_MASS_RANGE
+  assert oracle.scale == pytest.approx(
+    1.0 / TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_MASS_RANGE[1]
+  )
+  assert cfg.observations["critic"].terms["payload_mass"].clip == (
+    TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_MASS_RANGE
+  )
+  assert (
+    pal_talos_grasping_oracle_mass_tray_ppo_runner_cfg().experiment_name
+    == "talos_contact_grasp_tray_oracle_2p5_15kg"
   )
 
 

@@ -8,6 +8,7 @@ from .env_cfgs import (
   pal_talos_flat_env_cfg,
   pal_talos_free_payload_tray_flat_env_cfg,
   pal_talos_grasping_estimated_payload_state_tray_flat_env_cfg,
+  pal_talos_grasping_oracle_mass_tray_flat_env_cfg,
   pal_talos_grasping_tray_flat_env_cfg,
   pal_talos_grasping_wrist_ft_mass_identification_tray_flat_env_cfg,
   pal_talos_oracle_mass_tray_flat_env_cfg,
@@ -21,6 +22,7 @@ from .rl_cfg import (
   pal_talos_estimated_mass_zero_joint_torque_tray_ppo_runner_cfg,
   pal_talos_estimated_payload_state_tray_ppo_runner_cfg,
   pal_talos_free_payload_tray_ppo_runner_cfg,
+  pal_talos_grasping_oracle_mass_tray_ppo_runner_cfg,
   pal_talos_grasping_payload_state_estimator_ppo_runner_cfg,
   pal_talos_grasping_random_mass_tray_ppo_runner_cfg,
   pal_talos_grasping_tray_ppo_runner_cfg,
@@ -134,6 +136,14 @@ register_mjlab_task(
     play=True, randomize_payload_mass=True
   ),
   rl_cfg=pal_talos_grasping_random_mass_tray_ppo_runner_cfg(),
+  runner_cls=VelocityOnPolicyRunner,
+)
+
+register_mjlab_task(
+  task_id="Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp-Oracle-2p5-15kg",
+  env_cfg=pal_talos_grasping_oracle_mass_tray_flat_env_cfg(),
+  play_env_cfg=pal_talos_grasping_oracle_mass_tray_flat_env_cfg(play=True),
+  rl_cfg=pal_talos_grasping_oracle_mass_tray_ppo_runner_cfg(),
   runner_cls=VelocityOnPolicyRunner,
 )
 

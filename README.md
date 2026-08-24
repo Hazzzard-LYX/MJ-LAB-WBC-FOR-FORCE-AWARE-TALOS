@@ -143,9 +143,20 @@ uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp \
 uv run train Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp-Random-Mass \
   --env.scene.num-envs 1024
 uv run train \
+  Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp-Oracle-2p5-15kg \
+  --env.scene.num-envs 1024
+uv run train \
   Mjlab-Velocity-Flat-Pal-Talos-Tray-Contact-Grasp-Random-Mass-State-Estimator \
   --env.scene.num-envs 1024
 ```
+
+The `Oracle-2p5-15kg` task keeps the tray completely free and exposes only the
+normalized simulator payload mass as one additional actor input.  It is a
+privileged behavior teacher for collecting stable wrist-F/T identification
+rollouts, not a deployable policy.  Initialize it from the fixed-2.5 kg grasp
+checkpoint with `slurm/prepare_contact_grasp_oracle_checkpoint.py`; the new
+input is appended with a zero first-layer weight so the initial policy exactly
+preserves the learned light-payload behavior.
 
 The actor observes the two real commanded gripper encoders plus the existing
 deployable TALOS proprioception and force/torque channels.  Tray pose, handle
