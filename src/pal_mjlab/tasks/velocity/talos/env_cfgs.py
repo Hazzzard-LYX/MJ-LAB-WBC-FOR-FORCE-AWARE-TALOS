@@ -48,6 +48,7 @@ from pal_mjlab.tasks.velocity import mdp as pal_mdp
 
 TALOS_PAYLOAD_MASS_RANGE = (2.0, 25.0)
 TALOS_TRAY_PAYLOAD_MASS_RANGE = (2.5, 30.0)
+TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_MASS_RANGE = (2.5, 15.0)
 # Bounds used to normalize the estimated payload COM position in the tray
 # frame.  The horizontal limits match the payload-drop termination envelope;
 # the vertical interval includes a settled cube and brief contact transients.
@@ -92,6 +93,10 @@ TALOS_PAYLOAD_ALPHA_RANGE = (
 TALOS_TRAY_PAYLOAD_ALPHA_RANGE = (
   0.5 * math.log(TALOS_TRAY_PAYLOAD_MASS_RANGE[0] / 2.5),
   0.5 * math.log(TALOS_TRAY_PAYLOAD_MASS_RANGE[1] / 2.5),
+)
+TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_ALPHA_RANGE = (
+  0.5 * math.log(TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_MASS_RANGE[0] / 2.5),
+  0.5 * math.log(TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_MASS_RANGE[1] / 2.5),
 )
 
 
@@ -1047,6 +1052,37 @@ def pal_talos_grasping_tray_flat_env_cfg(
         ],
       },
     )
+  return cfg
+
+
+def pal_talos_grasping_oracle_mass_tray_flat_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create free-contact grasping with true mass over the 2.5--15 kg range.
+
+  This is a privileged behavior teacher: the tray remains an independent
+  six-DoF body held only through hand contacts, while the actor receives one
+  additional normalized observation containing the simulator payload mass.
+  """
+  cfg = pal_talos_grasping_tray_flat_env_cfg(
+    play=play,
+    randomize_payload_mass=True,
+  )
+  payload_cfg = SceneEntityCfg("payload", body_names=(TALOS_TRAY_PAYLOAD_BODY_NAME,))
+  cfg.events["payload_inertia"].params["alpha_range"] = (
+    TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_ALPHA_RANGE
+  )
+  cfg.observations["actor"].terms["payload_mass_oracle"] = ObservationTermCfg(
+    func=pal_mdp.payload_mass,
+    params={"asset_cfg": payload_cfg},
+    clip=TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_MASS_RANGE,
+    scale=1.0 / TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_MASS_RANGE[1],
+  )
+  critic_mass = cfg.observations["critic"].terms["payload_mass"]
+  cfg.observations["critic"].terms["payload_mass"] = replace(
+    critic_mass,
+    clip=TALOS_CONTACT_GRASP_ORACLE_PAYLOAD_MASS_RANGE,
+  )
   return cfg
 
 
